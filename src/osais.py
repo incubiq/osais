@@ -1,4 +1,6 @@
 
+__version__="1.0.18"
+
 ## ------------------------------------------------------------------------
 #       OSAIS python Lib (interface between AIs and OSAIS)
 ## ------------------------------------------------------------------------
@@ -11,13 +13,13 @@ import base64
 from datetime import datetime
 import argparse
 
-from libOSAISTools import getHostInfo, listDirContent, is_running_in_docker, get_external_ip, get_container_ip, get_machine_name, get_os_name, getCudaInfo, downloadImage, start_observer_thread, clearOldFiles, start_notification_thread
+from osais_utils import getHostInfo, listDirContent, is_running_in_docker, get_external_ip, get_container_ip, get_machine_name, get_os_name, getCudaInfo, downloadImage, start_observer_thread, clearOldFiles, start_notification_thread
 
 ## ------------------------------------------------------------------------
 #       all global vars
 ## ------------------------------------------------------------------------
 
-gVersionLibOSAIS="1.0.15"       ## version of this library (to keep it latest everywhere)
+gVersionLibOSAIS=__version__    ## version of this library (to keep it latest everywhere)
 gUsername=None                  ## user owning this AI (necessary to claim VirtAI regs)
 
 gName=None                      ## name of this AI (name of engine)

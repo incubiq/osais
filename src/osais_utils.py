@@ -12,7 +12,6 @@ import ctypes
 import threading
 
 cuda=0                          ## from cuda import cuda, nvrtc
-gVersionLibOSAIS="1.0.12"       ## version of this library (to keep it latest everywhere)
 gObserver=None
 
 ## ------------------------------------------------------------------------
