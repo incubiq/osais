@@ -1,5 +1,7 @@
 
 __pycache__/
 dist/
-src/osais.egg-info/
+build/
+osais.egg-info/
 setup.txt
+.pypirc

@@ -1,6 +1,9 @@
 """
 A package for OSAIS virtual AI.
 """
+__version__="1.0.29"
+__author__ = "incubiq"
+__email__ = "eric@incubiq.com"
 
 from .osais import osais_loadConfig
 from .osais import osais_getEnv
@@ -15,6 +18,3 @@ from .osais import osais_notify
 from .osais import osais_onNotifyFileCreated
 from .osais import osais_resetOSAIS
 from .osais import osais_initializeAI
-
-__author__ = "incubiq"
-__email__ = "eric@incubiq.com"
