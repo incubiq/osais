@@ -1,5 +1,5 @@
 
-__version__="1.0.18"
+__version__="1.0.31"
 
 ## ========================================================================
 ## 
@@ -468,6 +468,11 @@ def _getFullConfig(_name) :
         "engine": _json
     }
 
+## PUBLIC - are we running locally?
+def osais_isLocal():
+    global gIsLocal
+    return gIsLocal
+
 ## PUBLIC - load the config of this AI
 def osais_loadConfig(_name): 
     return _loadConfig(_name)
@@ -573,7 +578,8 @@ def _clearDir():
 
 ## PUBLIC - info about harware this AI is running on
 def osais_getHarwareInfo() :
-    return getHostInfo()
+    global gName
+    return getHostInfo(gName)
 
 ## PUBLIC - get list of files in a dir (check what was generated)
 def osais_getDirectoryListing(_dir) :

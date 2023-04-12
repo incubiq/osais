@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='osais',
-    version='1.0.29',
+    version='1.0.31',
     author='incubiq',
     author_email='eric@incubiq.com',
     description='The osais Python lib for connecting AIs to OSAIS cloud',

@@ -1,10 +1,11 @@
 """
 A package for OSAIS virtual AI.
 """
-__version__="1.0.29"
+__version__="1.0.31"
 __author__ = "incubiq"
 __email__ = "eric@incubiq.com"
 
+from .osais import osais_isLocal
 from .osais import osais_loadConfig
 from .osais import osais_getEnv
 from .osais import osais_getHarwareInfo
