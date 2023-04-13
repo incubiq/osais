@@ -1,5 +1,5 @@
 
-__version__="1.0.31"
+__version__="1.0.32"
 
 ## ========================================================================
 ## 
@@ -393,8 +393,8 @@ gInputDir="./_input/"
 gOutputDir="./_output/"
 
 AI_PROGRESS_ERROR=-1
-AI_PROGRESS_IDLE=0
-AI_PROGRESS_ARGS=1
+AI_PROGRESS_IDLE=0                  # unused
+AI_PROGRESS_ARGS=1                  # unused
 AI_PROGRESS_AI_STARTED=2
 AI_PROGRESS_INIT_IMAGE=3
 AI_PROGRESS_DONE_IMAGE=4
@@ -448,8 +448,8 @@ def _getFullConfig(_name) :
     global gExtIP
  
     _ip=gExtIP
-    if gIsVirtualAI:
-        _ip=gIPLocal
+    if gIsVirtualAI==False:
+        _ip=gIPLocal                ## we register with local ip if we are in local gateway mode
 
     _json=_loadConfig(_name)
 
@@ -921,6 +921,7 @@ def getCredsParams() :
     global gArgsOSAIS
     return {
         "engine": gName, 
+        "version": gVersion, 
         "tokenAI": gArgsOSAIS.tokenAI,
         "username": gArgsOSAIS.username,
         "isLocal": gArgsOSAIS.isLocal

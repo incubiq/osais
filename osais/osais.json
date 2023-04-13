@@ -9,6 +9,12 @@
         "type": "string",
         "default": null
     }, {
+        "in": "version",
+        "out": null,
+        "isMandatory": false,
+        "type": "string",
+        "default": null
+    }, {
         "in": "username",
         "out": "-u",
         "isMandatory": true,
