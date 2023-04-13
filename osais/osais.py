@@ -382,7 +382,7 @@ gIsScheduled=False              ## do we have a scheduled event running?
 ## run times
 gIsWarmup=False                 ## True if the request was a warmup one (not a true one from client)
 gIsBusy=False                   ## True if AI busy processing
-gDefaultCost=float(1)           ## default cost value in secs (will get overriden fast, this value is no big deal)
+gDefaultCost=1000               ## default cost value in ms (will get overriden fast, this value is no big deal)
 gaProcessTime=[]                ## Array of last x (10/20?) time spent for processed requests 
 
 ## processing specifics
@@ -428,7 +428,7 @@ def _loadConfig(_name):
     gOrigin=_json["origin"]
     _cost=_json["default_cost"]
     if _cost!=None:
-        gDefaultCost=float(_cost)
+        gDefaultCost=_cost
 
     return _json
 
@@ -900,7 +900,8 @@ def osais_runAI(*args):
     ## calculate cost
     gIsBusy=False
     end_date = datetime.utcnow()
-    cost = (end_date - beg_date).total_seconds()
+    delta=end_date - beg_date
+    cost = int(delta.total_seconds()* 1000 + delta.microseconds / 1000)
     _addCost(cost)
 
     ## notify end
