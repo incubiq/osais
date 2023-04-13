@@ -1,5 +1,5 @@
 
-__version__="1.0.33"
+__version__="1.0.35"
 
 ## ========================================================================
 ## 
@@ -38,7 +38,9 @@ class NewFileHandler(FileSystemEventHandler):
         if event.is_directory:
             return
         if event.event_type == 'created':
-            self.fnOnFileCreated(os.path.dirname(event.src_path), os.path.basename(event.src_path), self._args)
+            ## only notify if uid in the filename (otherwise we are getting notified of another AI's job !)
+            if self._args["-uid"] in event.src_path:
+                self.fnOnFileCreated(os.path.dirname(event.src_path), os.path.basename(event.src_path), self._args)
 
 def start_observer_thread(path, fnOnFileCreated, _args):
 
@@ -1138,6 +1140,7 @@ def osais_initializeAI():
     gVersion = gConfig["version"]
 
     print("\r\n===== Config =====")
+    print("engine: "+str(gName) + " v"+str(gVersion))
     print("is Local: "+str(gIsLocal))
     print("is Virtual: "+str(gIsVirtualAI))
     print("owned by client: "+str(gUsername))
