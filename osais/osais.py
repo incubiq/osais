@@ -1,5 +1,5 @@
 
-__version__="1.0.35"
+__version__="1.0.36"
 
 ## ========================================================================
 ## 
@@ -100,6 +100,15 @@ def clearOldFiles(_dir):
 ## ------------------------------------------------------------------------
 #       System utils
 ## ------------------------------------------------------------------------
+
+def consoleLog(err): 
+    msg=""
+    if hasattr(err, 'msg'):
+        msg=err.msg
+    else:
+        if err.args and err.args[0]:
+            msg=err.args[0]                      
+    print("CRITICAL: "+msg)
 
 ## get a meaningful name for our machine
 def get_machine_name() :
@@ -640,7 +649,7 @@ def _notifyGateway() :
             raise ValueError("CRITICAL: could not notify Gateway")
 
     except Exception as err:
-        print("CRITICAL: "+err.msg)
+        consoleLog(err)
         raise err
     return True
 
@@ -651,7 +660,7 @@ def osais_resetGateway(_localGateway):
     try:
         _notifyGateway()
     except Exception as err:
-        print("CRITICAL: "+err.msg)
+        consoleLog(err)
         raise err
     
     print("=> This AI is reset to talk to Gateway "+_localGateway)
@@ -691,7 +700,7 @@ def _registerVAI():
             gSecret=objRes["secret"]
             print("We are REGISTERED with OSAIS Prod")
         except Exception as err:
-            print("CRITICAL: "+err.msg)
+            consoleLog(err)
             raise err
 
     ## reg with Local OSAIS (debug)
@@ -706,7 +715,7 @@ def _registerVAI():
             gSecretLocal=objRes["secret"]
             print("We are REGISTERED with OSAIS Local (debug)")
         except Exception as err:
-            print("CRITICAL: "+err.msg)
+            consoleLog(err)
             raise err
 
     return True
@@ -738,7 +747,7 @@ def _loginVAI():
             print("We got an authentication token into OSAIS")
             gAuthToken=objRes["authToken"]    
         except Exception as err:
-            print("CRITICAL: "+err.msg)
+            consoleLog(err)
             raise err
 
     if gTokenLocal!= None:
@@ -772,7 +781,7 @@ def osais_authenticateAI():
             resp= _registerVAI()
             resp=_loginVAI()
         except Exception as err:
-            print("CRITICAL: "+err.msg)
+            consoleLog(err)
             raise err
         
         # Run the scheduler
@@ -852,7 +861,7 @@ def osais_runAI(*args):
                 print("no image to process")
                 return "input required"
         except Exception as err:
-            print("CRITICAL: "+err.msg)
+            consoleLog(err)
             raise err
     
     ## Init OSAIS Params (from all args, keep only those for OSAIS)
@@ -896,7 +905,7 @@ def osais_runAI(*args):
             else:
                 response=fn_run(aArgForparserAI, args[2], args[3])
     except Exception as err:
-        print("CRITICAL: "+err.msg)
+        consoleLog(err)
         raise err
 
     ## calculate cost
