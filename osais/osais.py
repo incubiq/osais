@@ -1,5 +1,5 @@
 
-__version__="1.0.36"
+__version__="1.0.38"
 
 ## ========================================================================
 ## 
@@ -496,20 +496,34 @@ def osais_getEnv(_filename):
     global gName
 
     ## read env from config file
-    with open(_filename, "r") as f:
-        content = f.read()
-    variables = content.split("\n")
-    for var in variables:
-        if var!="":
-            key, value = var.split("=")
-            if key == "USERNAME":
-                gUsername = value
-            elif key == "IS_LOCAL":
-                gIsLocal = (value=="True")
-            elif key == "IS_VIRTUALAI":
-                gIsVirtualAI = (value=="True")
-            elif key == "ENGINE":
-                gName = value
+    try:
+        with open(_filename, "r") as f:
+            content = f.read()
+        variables = content.split("\n")
+        for var in variables:
+            if var!="":
+                key, value = var.split("=")
+                if key == "USERNAME":
+                    gUsername = value
+                elif key == "IS_LOCAL":
+                    gIsLocal = (value=="True")
+                elif key == "IS_VIRTUALAI":
+                    gIsVirtualAI = (value=="True")
+                elif key == "ENGINE":
+                    gName = value
+    except Exception as err: 
+        print(f'No env file {_filename}')
+
+    # overload with env settings if any
+    if os.environ.get('IS_LOCAL'):
+        gIsLocal=(os.environ.get('IS_LOCAL')=="True")
+    if os.environ.get('IS_VIRTUALAI'):
+        gIsVirtualAI=(os.environ.get('IS_VIRTUALAI')=="True")
+    if os.environ.get('ENGINE'):
+        gName=os.environ.get('ENGINE')
+    if os.environ.get('USERNAME') and gUsername==None:
+        gUsername=os.environ.get('USERNAME')
+
     return {
         "username": gUsername,
         "isLocal": gIsLocal,
@@ -700,7 +714,7 @@ def _registerVAI():
             gSecret=objRes["secret"]
             print("We are REGISTERED with OSAIS Prod")
         except Exception as err:
-            consoleLog(err)
+            consoleLog("Exception raised while trying to register to PROD")
             raise err
 
     ## reg with Local OSAIS (debug)
@@ -715,7 +729,7 @@ def _registerVAI():
             gSecretLocal=objRes["secret"]
             print("We are REGISTERED with OSAIS Local (debug)")
         except Exception as err:
-            consoleLog(err)
+            consoleLog("Exception raised while trying to register to DEBUG")
             raise err
 
     return True
@@ -747,7 +761,7 @@ def _loginVAI():
             print("We got an authentication token into OSAIS")
             gAuthToken=objRes["authToken"]    
         except Exception as err:
-            consoleLog(err)
+            consoleLog("Exception raised while trying to login to PROD")
             raise err
 
     if gTokenLocal!= None:
@@ -781,7 +795,7 @@ def osais_authenticateAI():
             resp= _registerVAI()
             resp=_loginVAI()
         except Exception as err:
-            consoleLog(err)
+            consoleLog("Exception raised while trying to authenticate to OSAIS")
             raise err
         
         # Run the scheduler
@@ -861,6 +875,7 @@ def osais_runAI(*args):
                 print("no image to process")
                 return "input required"
         except Exception as err:
+            gIsBusy=False
             consoleLog(err)
             raise err
     
@@ -905,6 +920,7 @@ def osais_runAI(*args):
             else:
                 response=fn_run(aArgForparserAI, args[2], args[3])
     except Exception as err:
+        gIsBusy=False
         consoleLog(err)
         raise err
 
@@ -1152,7 +1168,11 @@ def osais_initializeAI():
     print("engine: "+str(gName) + " v"+str(gVersion))
     print("is Local: "+str(gIsLocal))
     print("is Virtual: "+str(gIsVirtualAI))
-    print("owned by client: "+str(gUsername))
+    print("username: "+str(gUsername))
+    if gIsLocal:
+        print("location (local): "+str(gIPLocal)+":"+str(gPortAI))
+    else: 
+        print("location (external): "+str(gExtIP)+":"+str(gPortAI))
     print("===== /Config =====\r\n")
 
     ## make sure we have a config file
