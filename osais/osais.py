@@ -1,5 +1,5 @@
 
-__version__="1.0.39"
+__version__="1.0.40"
 
 ## ========================================================================
 ## 
@@ -47,11 +47,7 @@ class NewFileHandler(FileSystemEventHandler):
                 self.fnOnFileCreated(os.path.dirname(event.src_path), os.path.basename(event.src_path), self._args)
 
                 ## also send to S3
-                if gS3!=None:
-                    # Filename - File to upload
-                    # Bucket - Bucket to upload to (the top level directory under AWS S3)
-                    # Key - S3 object name (can contain subdirectories). If not specified then file_name is used
-                    gS3.meta.client.upload_file(Filename=event.src_path, Bucket=gS3Bucket, Key="output/"+os.path.basename(event.src_path))
+                osais_uploadeFileToS3(event.src_path, "output/")
 
 def start_observer_thread(path, fnOnFileCreated, _args):
 
@@ -336,6 +332,22 @@ def downloadImage(url) :
     urllib.request.urlretrieve(url, local_file_path)
     return f"{local_filename}{file_extension}"
 
+def osais_uploadeFileToS3(_filename, _dirS3): 
+    global gS3
+
+    if gS3!=None:
+        try:
+            # Filename - File to upload
+            # Bucket - Bucket to upload to (the top level directory under AWS S3)
+            # Key - S3 object name (can contain subdirectories). If not specified then file_name is used
+            gS3.meta.client.upload_file(Filename=_filename, Bucket=gS3Bucket, Key=_dirS3+os.path.basename(_filename))
+            return True
+        except Exception as err:
+            consoleLog(err)
+            raise err
+        
+    return False
+
 ## ========================================================================
 ## 
 ##                      OSAIS starts here 
@@ -477,6 +489,7 @@ def _getFullConfig(_name) :
     global gIsVirtualAI
     global gIPLocal
     global gExtIP
+    global gIsLocal
  
     _ip=gExtIP
     if gIsVirtualAI==False:
@@ -489,6 +502,9 @@ def _getFullConfig(_name) :
     gpuName="no GPU"
     if objCudaInfo != 0 and "name" in objCudaInfo and objCudaInfo["name"]:
         gpuName=objCudaInfo["name"]
+    _osais="https://opensourceais.com/"
+    if gIsLocal: 
+        _osais="http://"+_ip+":3022/"
 
     return {
         "username": gUsername,
@@ -497,6 +513,8 @@ def _getFullConfig(_name) :
         "machine": get_machine_name(),
         "ip": _ip,
         "port": gPortAI,
+        "osais": _osais,
+        "gateway": "http://"+_ip+":3023/",
         "config_ai": _jsonAI,
         "config_base": _jsonBase
     }
@@ -691,7 +709,9 @@ def osais_getInfo() :
     return {
         "name": gName,
         "version": gVersion,
-        "location": f"{gExtIP}:{gPortAI}/",
+        "location": f'https://{objConf["ip"]}:{objConf["port"]}/',
+        "osais": objConf["osais"],
+        "gateway": objConf["gateway"],
         "isRunning": True,    
         "isDocker": gIsDocker,    
         "lastActive_at": gLastChecked_at,
@@ -970,6 +990,42 @@ def osais_authenticateClient(_id, _secret):
     return resp 
 
 ## ------------------------------------------------------------------------
+#       ask OSAIS to process a request
+## ------------------------------------------------------------------------
+
+def osais_postRequest(objReq):
+    global gClientAuthToken
+    global gClientAuthTokenLocal
+    global gIsLocal
+    global gName
+
+    resp={"data": None}
+    _url=None
+    _authToken=None
+    if gIsLocal:
+        _authToken=gClientAuthTokenLocal
+        _url=f"{gOriginLocalOSAIS}api/v1/private/client/ai/"+objReq.gName
+    else:
+        _authToken=gClientAuthToken
+        _url=f"{gOriginOSAIS}api/v1/private/client/ai/"+objReq.gName
+
+    try:
+        response = requests.post(_url, headers={
+            "Content-Type": "application/json",
+            'Accept': 'text/plain',
+            "Authorization": f"Bearer {_authToken}"
+        }, data=json.dumps(objReq))
+        objRes=response.json()["data"]
+        if objRes is None:
+            print("COULD NOT post request")
+        resp={"data": objRes}
+
+    except Exception as err:
+        raise err
+
+    return resp 
+
+## ------------------------------------------------------------------------
 #       Run the AI
 ## ------------------------------------------------------------------------
 
@@ -1172,7 +1228,7 @@ def _uploadImageToOSAIS(objParam, isLocal):
         "Authorization": f"Bearer {_auth}"
     }
 
-    api_url=f"{_osais}api/v1/private/upload"        
+    api_url=f"{_osais}api/v1/private/virtualai/upload"        
     payload = json.dumps(objParam)
     response = requests.post(api_url, headers=headers, data=payload )
     objRes=response.json()
@@ -1234,7 +1290,7 @@ def osais_notify(CredParam, MorphingParam, StageParam):
 
         if gIsVirtualAI==True:
             headers["Authorization"]= f"Bearer {_auth}"
-            api_url=f"{_osais}api/v1/private/notify"
+            api_url=f"{_osais}api/v1/private/virtualai/notify"
 
     objParam={
         "response": {

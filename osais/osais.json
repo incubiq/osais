@@ -1,15 +1,11 @@
 {
     "name": "osais",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "OSAIS params",
+    "default_cost": 0,
+    "origin": "",
     "params": [{
         "in": "engine",
-        "out": null,
-        "isMandatory": false,
-        "type": "string",
-        "default": null
-    }, {
-        "in": "version",
         "out": null,
         "isMandatory": false,
         "type": "string",
