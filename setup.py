@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='osais',
-    version='1.0.40',
+    version='1.0.42',
     author='incubiq',
     author_email='eric@incubiq.com',
     description='The osais Python lib for connecting AIs to OSAIS cloud',
@@ -16,7 +16,9 @@ setup(
         'requests >=2.25.1',
         "schedule ==1.1.0",
         "watchdog ==2.1.9",
-        "Werkzeug ==2.2.2"
+        "Werkzeug ==2.2.2",
+        "Jinja2 ==3.1.2",
+        "boto3 ==1.26.130"
     ],
     python_requires='>=3',
     classifiers=[

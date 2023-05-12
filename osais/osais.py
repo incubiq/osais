@@ -1,5 +1,5 @@
 
-__version__="1.0.40"
+__version__="1.0.42"
 
 ## ========================================================================
 ## 
@@ -343,7 +343,7 @@ def osais_uploadeFileToS3(_filename, _dirS3):
             gS3.meta.client.upload_file(Filename=_filename, Bucket=gS3Bucket, Key=_dirS3+os.path.basename(_filename))
             return True
         except Exception as err:
-            consoleLog(err)
+            consoleLog({"msg":"Could not upload file to S3"})
             raise err
         
     return False
@@ -436,8 +436,8 @@ gInputDir="./_input/"
 gOutputDir="./_output/"
 
 AI_PROGRESS_ERROR=-1
-AI_PROGRESS_IDLE=0                  # unused
-AI_PROGRESS_ARGS=1                  # unused
+AI_PROGRESS_REQSENT=0                  # unused (that s for OSAIS to know it sent the req)
+AI_PROGRESS_REQRECEIVED=1
 AI_PROGRESS_AI_STARTED=2
 AI_PROGRESS_INIT_IMAGE=3
 AI_PROGRESS_DONE_IMAGE=4
@@ -709,7 +709,7 @@ def osais_getInfo() :
     return {
         "name": gName,
         "version": gVersion,
-        "location": f'https://{objConf["ip"]}:{objConf["port"]}/',
+        "location": f'http://{objConf["ip"]}:{objConf["port"]}/',
         "osais": objConf["osais"],
         "gateway": objConf["gateway"],
         "isRunning": True,    
@@ -747,7 +747,7 @@ def _notifyGateway() :
             raise ValueError("CRITICAL: could not notify Gateway")
 
     except Exception as err:
-        consoleLog(err)
+        consoleLog({"msg":"CRITICAL: could not notify Gateway"})
         raise err
     return True
 
@@ -758,7 +758,7 @@ def osais_resetGateway(_localGateway):
     try:
         _notifyGateway()
     except Exception as err:
-        consoleLog(err)
+        consoleLog({"msg":"Could not reset connection to Gateway"})
         raise err
     
     print("=> This AI is reset to talk to Gateway "+_localGateway)
@@ -769,7 +769,7 @@ def osais_resetGateway(_localGateway):
 ## ------------------------------------------------------------------------
 
 # Register our VAI into OSAIS
-def _registerVAI():
+def _registerVAI(_originOSAIS):
     global gName
     global gToken
     global gSecret
@@ -785,23 +785,32 @@ def _registerVAI():
     }
     objParam=_getFullConfig(gName)
 
-    ## reg with Prod
+    ## our AI is on AWS
     if gIsLocal==False:
+        # make it call the OSAIS that was requested to call (prod or local)
+        isProdToProd=(_originOSAIS==None)
+        if _originOSAIS==None:
+            _originOSAIS=gOriginOSAIS
         try:
-            response = requests.post(f"{gOriginOSAIS}api/v1/public/virtualai/register", headers=headers, data=json.dumps(objParam))
+            response = requests.post(f"{_originOSAIS}api/v1/public/virtualai/register", headers=headers, data=json.dumps(objParam))
             objRes=response.json()["data"]
             if objRes is None:
                 print("COULD NOT REGISTER, stopping it here")
                 sys.exit()
 
-            gToken=objRes["token"]
-            gSecret=objRes["secret"]
+            if isProdToProd:
+                gToken=objRes["token"]
+                gSecret=objRes["secret"]
+            else :
+                gTokenLocal=objRes["token"]
+                gSecretLocal=objRes["secret"]
+
             print("We are REGISTERED with OSAIS Prod")
         except Exception as err:
-            consoleLog("Exception raised while trying to register to PROD")
+            consoleLog({"msg":"Exception raised while trying to register to PROD"})
             raise err
 
-    ## reg with Local OSAIS (debug)
+    ## our AI is local, reg with Local OSAIS (debug)
     else:
         try:
             response = requests.post(f"{gOriginLocalOSAIS}api/v1/public/virtualai/register", headers=headers, data=json.dumps(objParam))
@@ -813,13 +822,13 @@ def _registerVAI():
             gSecretLocal=objRes["secret"]
             print("We are REGISTERED with OSAIS Local (debug)")
         except Exception as err:
-            consoleLog("Exception raised while trying to register to DEBUG")
+            consoleLog({"msg":"Exception raised while trying to register to DEBUG"})
             raise err
 
     return True
 
 # Authenticate into OSAIS
-def _loginVAI():
+def _loginVAI(_originOSAIS):
     global gToken
     global gSecret
     global gAuthToken
@@ -845,12 +854,14 @@ def _loginVAI():
             print("We got an authentication token into OSAIS")
             gAuthToken=objRes["authToken"]    
         except Exception as err:
-            consoleLog("Exception raised while trying to login to PROD")
+            consoleLog({"msg":"Exception raised while trying to login to PROD"})
             raise err
 
     if gTokenLocal!= None:
+        if _originOSAIS==None:
+            _originOSAIS=gOriginLocalOSAIS
         try:
-            response = requests.post(f"{gOriginLocalOSAIS}api/v1/public/virtualai/login", headers=headers, data=json.dumps({
+            response = requests.post(f"{_originOSAIS}api/v1/public/virtualai/login", headers=headers, data=json.dumps({
                 "token": gTokenLocal,
                 "secret": gSecretLocal
             }))
@@ -866,28 +877,27 @@ def _loginVAI():
     return True
 
 ## PUBLIC - Authenticate the Virtual AI into OSAIS
-def osais_authenticateAI():
+def osais_authenticateAI(_originOSAIS):
     global gIsVirtualAI
     global gOriginOSAIS
     global gIsScheduled
     global gDemoID
     global gDemoSecret
     
-    Resp={"data": None}
+    resp={"data": None}
     if gIsVirtualAI:
-
         try:
-            resp= _registerVAI()
-            resp=_loginVAI()
+            resp= _registerVAI(_originOSAIS)
+            resp=_loginVAI(_originOSAIS)
         except Exception as err:
-            consoleLog("Exception raised while trying to authenticate to OSAIS")
+            consoleLog({"msg":"Exception raised while trying to authenticate to OSAIS"})
             raise err
         
         # Run the scheduler
         if gIsScheduled==False:
             gIsScheduled=True
             schedule.every().day.at("10:30").do(_loginVAI)
-    
+
     return resp
 
 ## ------------------------------------------------------------------------
@@ -982,7 +992,7 @@ def osais_authenticateClient(_id, _secret):
             }}
 
         except Exception as err:
-            consoleLog("Exception raised while trying to login as CLIENT to PROD")
+            consoleLog({"msg":"Exception raised while trying to login as CLIENT to PROD"})
             gClientAuthToken=None
 
     dataClient=getClientInfo(authToken)
@@ -1061,6 +1071,9 @@ def osais_runAI(*args):
     global gAProcessed
     global gName 
     global gLastProcessStart_at
+    global gOriginOSAIS
+    global gOriginLocalOSAIS
+    global gIsLocal
 
     ## get args
     fn_run=args[0]
@@ -1070,6 +1083,14 @@ def osais_runAI(*args):
     _uid=_args.get('-uid')
     if _uid in gAProcessed:
         return  "not processing, already tried..."
+
+    ## where is the caller?
+    _orig=None
+    try: 
+        if _args["-orig"]:
+            _orig=_args["-orig"]
+    except:
+        _orig=None
 
     ## start time
     gIsBusy=True
@@ -1096,7 +1117,7 @@ def osais_runAI(*args):
                 return "input required"
         except Exception as err:
             gIsBusy=False
-            consoleLog(err)
+            consoleLog({"msg":"Could not download image"})
             raise err
     
     ## Init OSAIS Params (from all args, keep only those for OSAIS)
@@ -1105,6 +1126,12 @@ def osais_runAI(*args):
     args_ExclusiveOSAIS.append('-idir')
     aArgForParserOSAIS=_argsFromFilter(aArgForParserOSAIS, args_ExclusiveOSAIS, True)
     osais_initParser(aArgForParserOSAIS)
+
+    ## notify OSAIS (Req received)
+    CredsParam=getCredsParams()
+    MorphingParam=getMorphingParams()
+    StageParam=getStageParams(AI_PROGRESS_REQRECEIVED, 0)
+    osais_notify(_orig, CredsParam, MorphingParam , StageParam)
 
     if gIsWarmup:
         print("\r\n=> Warming up... \r\n")
@@ -1116,10 +1143,8 @@ def osais_runAI(*args):
     gAProcessed.append(_uid)
 
     ## notify OSAIS (start)
-    CredsParam=getCredsParams()
-    MorphingParam=getMorphingParams()
     StageParam=getStageParams(AI_PROGRESS_AI_STARTED, 0)
-    osais_notify(CredsParam, MorphingParam , StageParam)
+    osais_notify(_orig, CredsParam, MorphingParam , StageParam)
 
     ## start watch file creation
     _output=_getOutputDir()
@@ -1127,7 +1152,7 @@ def osais_runAI(*args):
 
     ## Notif OSAIS
     StageParam=getStageParams(AI_PROGRESS_INIT_IMAGE, 0)
-    osais_notify(CredsParam, MorphingParam , StageParam)
+    osais_notify(_orig, CredsParam, MorphingParam , StageParam)
 
     ## run AI
     response=None
@@ -1141,7 +1166,7 @@ def osais_runAI(*args):
                 response=fn_run(aArgForparserAI, args[2], args[3])
     except Exception as err:
         gIsBusy=False
-        consoleLog(err)
+        consoleLog({"msg": "Error processing args in RUN command"})
         raise err
 
     ## calculate cost
@@ -1153,7 +1178,12 @@ def osais_runAI(*args):
 
     ## notify end
     StageParam=getStageParams(AI_PROGRESS_AI_STOPPED, cost)
-    osais_notify(CredsParam, MorphingParam , StageParam)
+    osais_notify(_orig, CredsParam, MorphingParam , StageParam)
+
+    if gIsWarmup:
+        _strDelta=str(delta)
+        print("\r\n=> AI ready!")
+        print("=> Able to process requests in "+_strDelta+" secs\r\n")
 
     ## default OK response if the AI does not send any
     if response==None:
@@ -1186,8 +1216,8 @@ def getMorphingParams() :
 
 def getStageParams(_stage, _cost) :
     global gArgsOSAIS
-    if _stage==AI_PROGRESS_ARGS:
-        return {"stage": AI_PROGRESS_AI_STARTED, "descr":"Just parsed AI params"}
+    if _stage==AI_PROGRESS_REQRECEIVED:
+        return {"stage": AI_PROGRESS_REQRECEIVED, "descr":"Acknowledged request"}
     if _stage==AI_PROGRESS_ERROR:
         return {"stage": AI_PROGRESS_AI_STOPPED, "descr":"AI stopped with error"}
     if _stage==AI_PROGRESS_AI_STARTED:
@@ -1205,21 +1235,16 @@ def getStageParams(_stage, _cost) :
 ## ------------------------------------------------------------------------
 
 # Upload image to OSAIS 
-def _uploadImageToOSAIS(objParam, isLocal):
+def _uploadImageToOSAIS(_origin, objParam, isLocal):
     if gIsVirtualAI==False:
         return None
     
     global gAuthToken
-    global gOriginOSAIS
     global gAuthTokenLocal
-    global gOriginLocalOSAIS
-
+    
     _auth=gAuthToken
     if isLocal:
         _auth=gAuthTokenLocal
-    _osais=gOriginOSAIS
-    if isLocal:
-        _osais=gOriginLocalOSAIS
 
     # lets go call OSAIS AI Gateway / or OSAIS itself
     headers = {
@@ -1228,34 +1253,41 @@ def _uploadImageToOSAIS(objParam, isLocal):
         "Authorization": f"Bearer {_auth}"
     }
 
-    api_url=f"{_osais}api/v1/private/virtualai/upload"        
+    api_url=f"{_origin}api/v1/private/virtualai/upload"        
     payload = json.dumps(objParam)
     response = requests.post(api_url, headers=headers, data=payload )
     objRes=response.json()
     return objRes    
 
 def osais_onNotifyFileCreated(_dir, _filename, _args):
+    ## where is the caller?
+    _orig=None
+    try: 
+        if _args["-orig"]:
+            _orig=_args["-orig"]
+    except:
+        _orig=None
+
+    # notify
     gArgsOSAIS.filename=_filename
     _stageParam=getStageParams(AI_PROGRESS_DONE_IMAGE, 0)
     _morphingParam=getMorphingParams()
     _credsParam=getCredsParams()
-    osais_notify(_credsParam, _morphingParam, _stageParam)            # OSAIS Notification
+    osais_notify(_orig, _credsParam, _morphingParam, _stageParam)            # OSAIS Notification
     return True
 
 # Direct Notify OSAIS 
-def osais_notify(CredParam, MorphingParam, StageParam):
+def osais_notify(_origin, CredParam, MorphingParam, StageParam):
     global gIPLocal
     global gPortGateway
-    global gOriginOSAIS
-    global gOriginLocalOSAIS
     global gIsVirtualAI
     global gAuthToken
     global gAuthTokenLocal
     global gLastChecked_at
     global gIsWarmup
 
-    ## no notification of warmup
-    if gIsWarmup:
+    ## no notification of warmup or unknown caller
+    if gIsWarmup or _origin==None:
         return None
     
     gLastChecked_at = datetime.utcnow()
@@ -1277,20 +1309,18 @@ def osais_notify(CredParam, MorphingParam, StageParam):
     }
 
     ## config for calling gateway
-    api_url = f"{gOriginGateway}api/v1/public/notify"
+    api_url = f"{_origin}api/v1/public/notify"
 
     ## config for calling OSAIS (no gateway)
     if gIsVirtualAI:
-        _osais=gOriginOSAIS
         _auth=gAuthToken
 
         if CredParam["isLocal"]:
-            _osais=gOriginLocalOSAIS
             _auth=gAuthTokenLocal
 
         if gIsVirtualAI==True:
             headers["Authorization"]= f"Bearer {_auth}"
-            api_url=f"{_osais}api/v1/private/virtualai/notify"
+            api_url=f"{_origin}api/v1/private/virtualai/notify"
 
     objParam={
         "response": {
@@ -1328,7 +1358,7 @@ def osais_notify(CredParam, MorphingParam, StageParam):
                 "cycle": str(MorphingParam["cycle"]),
                 "engine": CredParam["engine"],
             }            
-            _uploadImageToOSAIS(param, CredParam["isLocal"])
+            _uploadImageToOSAIS(_origin, param, CredParam["isLocal"])
     return objRes
 
 ## ------------------------------------------------------------------------
@@ -1408,7 +1438,7 @@ def osais_initializeAI():
         osais_resetOSAIS("https://opensourceais.com/", None)
     if gIsVirtualAI:
         try:
-            osais_authenticateAI()
+            osais_authenticateAI(None)
         except Exception as err:
             print("=> CRITICAL: Could not connect virtual AI "+gName+ " to OSAIS")
             return None
@@ -1443,5 +1473,3 @@ watch_directory=start_observer_thread(_getOutputDir(), osais_onNotifyFileCreated
 schedule.every(10).minutes.do(_clearDir)
 
 print("\r\nPython OSAIS Lib is loaded...")
-
-
