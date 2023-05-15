@@ -1,5 +1,5 @@
 
-__version__="1.0.42"
+__version__="1.0.43"
 
 ## ========================================================================
 ## 
@@ -36,8 +36,6 @@ class NewFileHandler(FileSystemEventHandler):
         self._args = _args
 
     def on_created(self, event):
-        global gS3Bucket
-        global gS3
 
         if event.is_directory:
             return
@@ -53,6 +51,8 @@ def start_observer_thread(path, fnOnFileCreated, _args):
 
     ## watch directory and call back if file was created
     def watch_directory(path, fnOnFileCreated, _args):    
+
+        print ("=> starting a watch on path: "+path+"\r\n")
         global gObserver
         if gObserver!=None:
             gObserver.stop()
@@ -110,11 +110,19 @@ def clearOldFiles(_dir):
 
 def consoleLog(err): 
     msg=""
-    if hasattr(err, 'msg'):
-        msg=err.msg
-    else:
-        if err.args and err.args[0]:
-            msg=err.args[0]                      
+    try: 
+        if err["msg"]:
+            msg=err["msg"]
+    except: 
+        try: 
+            if err.msg:
+                msg=err.msg
+        except: 
+            try:
+                if err.args and err.args[0]:
+                    msg=err.args[0]         
+            except: 
+                msg="???"
     print("CRITICAL: "+msg)
 
 ## get a meaningful name for our machine
@@ -317,23 +325,29 @@ def getHostInfo(_engine):
 ## ------------------------------------------------------------------------
 
 ## downloads an image as file from external URL
-def downloadImage(url) :
+def osais_downloadImage(url) :
     import urllib.request
 
     # Determine the file name and extension of the image based on the URL.
     file_name, file_extension = os.path.splitext(url)
+    print ("will download image from "+url)
     
     # Define the local file path where the image will be saved.
     spliter='/'
     local_filename=file_name.split(spliter)[-1]
     local_file_path = f"./_input/{local_filename}{file_extension}"
-    
+
     # Download the image from the URL and save it locally.
-    urllib.request.urlretrieve(url, local_file_path)
+    response = urllib.request.urlopen(url)
+    image_data = response.read()
+    with open(local_file_path, 'wb') as f:
+        f.write(image_data)
+
     return f"{local_filename}{file_extension}"
 
 def osais_uploadeFileToS3(_filename, _dirS3): 
     global gS3
+    global gS3Bucket
 
     if gS3!=None:
         try:
@@ -366,7 +380,7 @@ import base64
 from datetime import datetime
 import argparse
 
-## from osais_utils import getHostInfo, listDirContent, is_running_in_docker, get_external_ip, get_container_ip, get_machine_name, get_os_name, getCudaInfo, downloadImage, start_observer_thread, clearOldFiles, start_notification_thread
+##from osais import osais_initializeAI, osais_getInfo, osais_getHarwareInfo, osais_isDocker, osais_getClientID, osais_getDirectoryListing, osais_runAI, osais_authenticateAI, osais_isDebug, osais_authenticateClient, osais_postRequest, osais_downloadImage, osais_uploadeFileToS3
 
 ## ------------------------------------------------------------------------
 #       all global vars
@@ -383,22 +397,25 @@ gMachineName=get_machine_name() ## the name of the machine (will change all the 
 gLastChecked_at=datetime.utcnow()  ## when was this AI last used for processing anything
 gLastProcessStart_at=None       ## when was this AI last start event for processing anything
 
-## authenticate into OSAIS
-gAuthToken=None                 ## auth token into OSAIS for when working as virtual Ai
-gToken=None                     ## token used for authentication into OSAIS
-gSecret=None                    ## secret used for authentication into OSAIS
-gOriginOSAIS=None               ## location of OSAIS
+## virtual AI / local /docker ? note: AI can act BOTH at the same time as VirtualAI and a LocalAI for a gateway
+gIsDocker=is_running_in_docker()   ## are we running in a Docker?
+gIsVirtualAI=False              ## are we working as a Virtual AI config?
+gIsLocal=False                  ## are we working locally (with a gateway)?
+gIsDebug=False                  ## are we working in debug (localhost server)? note: we cannot be PROD and DEBUG at the same time
 
-## authenticate into a local OSAIS (debug)
-gAuthTokenLocal=None            ## auth token into a local OSAIS (debug) for when working as virtual Ai
-gTokenLocal=None                ## token used for authentication into a local OSAIS (debug)
-gSecretLocal=None               ## secret used for authentication into a local OSAIS (debug)
-gOriginLocalOSAIS=None          ## location of a local OSAIS (debug)
-gClientID=None                  ## ID to authenticate as client into OSAIS (using the ai page to request AI processing)
-gClientSecret=None              ## Pwd to authenticate as client into OSAIS (using the ai page to request AI processing)
+## OSAIS location
+gOriginOSAIS=None               ## location of OSAIS (Prod or debug)
+
+## authenticate into OSAIS as a VAI
+gVAIToken=None                  ## VAI token used for authentication into OSAIS
+gVAISecret=None                 ## VAI secret used for authentication into OSAIS
+gVAIAuthToken=None              ## authToken into OSAIS for when working as virtual AI
+
+## authenticate into OSAIS as a CLIENT (most likely DEMO CLIENT)
+gClientID=None                  ## ID of authenticated client into OSAIS 
 gClientAuthToken=None           ## the resulting Auth token as Client, after login
-gClientAuthTokenLocal=None      ## the resulting Auth token as Client, after login (for debug)
 
+## Gateway
 gOriginGateway=None             ## location of the local gateway for this (local) AI
 
 ## AWS related
@@ -412,11 +429,6 @@ gIPLocal=get_container_ip()     ## where this AI can be accessed locally
 gPortAI=None                    ## port where this AI is accessed (will be set by AI config)
 gPortGateway=3023               ## port where the gateway can be accessed
 gPortLocalOSAIS=3022            ## port where a local OSAIS can be accessed
-
-## virtual AI / local /docker ?
-gIsDocker=is_running_in_docker()   ## are we running in a Docker?
-gIsVirtualAI=False              ## are we working as a Virtual AI config?
-gIsLocal=False                  ## are we working locally (localhost server)?
 
 ## temp cache
 gAProcessed=[]                  ## all token being sent to processing (never call twice for same)
@@ -480,19 +492,16 @@ def _getFullConfig(_name) :
     global gUsername
     global gPortAI
     global gName
-    global gToken
-    global gSecret
+    global gVAIToken
+    global gVAISecret
     global gOriginOSAIS
-    global gTokenLocal
-    global gSecretLocal
-    global gOriginLocalOSAIS
     global gIsVirtualAI
     global gIPLocal
     global gExtIP
     global gIsLocal
  
     _ip=gExtIP
-    if gIsVirtualAI==False:
+    if gIsDebug:
         _ip=gIPLocal                ## we register with local ip if we are in local gateway mode
 
     _jsonAI=_loadConfig(_name)
@@ -502,9 +511,6 @@ def _getFullConfig(_name) :
     gpuName="no GPU"
     if objCudaInfo != 0 and "name" in objCudaInfo and objCudaInfo["name"]:
         gpuName=objCudaInfo["name"]
-    _osais="https://opensourceais.com/"
-    if gIsLocal: 
-        _osais="http://"+_ip+":3022/"
 
     return {
         "username": gUsername,
@@ -513,16 +519,26 @@ def _getFullConfig(_name) :
         "machine": get_machine_name(),
         "ip": _ip,
         "port": gPortAI,
-        "osais": _osais,
+        "osais": gOriginOSAIS,
         "gateway": "http://"+_ip+":3023/",
         "config_ai": _jsonAI,
         "config_base": _jsonBase
     }
 
-## PUBLIC - are we running locally?
+## PUBLIC - are we running in DEBUG mode?
+def osais_isDebug():
+    global gIsDebug
+    return gIsDebug
+
+## PUBLIC - are we running in local mode?
 def osais_isLocal():
     global gIsLocal
     return gIsLocal
+
+## PUBLIC - are we running in VAI mode?
+def osais_isVirtualAI():
+    global gIsVirtualAI
+    return gIsVirtualAI
 
 ## PUBLIC - load the config of this AI
 def osais_loadConfig(_name): 
@@ -531,67 +547,86 @@ def osais_loadConfig(_name):
 ## PUBLIC - Get env from file (local or docker)
 def osais_getEnv(_filename):
     global gUsername
-    global gDemoID
-    global gDemoSecret
     global gIsVirtualAI
+    global gIsDebug
     global gIsLocal
     global gName
+    global gVAIToken
+    global gVAISecret
     global gAWSSession
     global gS3
     global gS3Bucket
+    global gOriginOSAIS
 
     AWSID=None
     AWSSecret=None
 
     ## read env from config file
-    try:
-        with open(_filename, "r") as f:
-            content = f.read()
-        print(f'Reading env vars from {_filename}')
-        variables = content.split("\n")
-        for var in variables:
-            if var!="":
-                key, value = var.split("=")
-                if key == "USERNAME":
-                    gUsername = value
-                elif key == "IS_LOCAL":
-                    gIsLocal = (value=="True")
-                elif key == "IS_VIRTUALAI":
-                    gIsVirtualAI = (value=="True")
-                elif key == "ENGINE":
-                    gName = value
-                elif key == "S3_BUCKET":
-                    gS3Bucket = value
-                elif key == "AWS_ACCESS_KEY_ID":
-                    AWSID = value
-                elif key == "AWS_ACCESS_KEY_SECRET":
-                    AWSSecret = value
-    except Exception as err: 
-        print(f'No env file {_filename}')
+    if _filename!=None:
+        try:
+            with open(_filename, "r") as f:
+                content = f.read()
+            print(f'=> Reading env vars from {_filename}')
+            variables = content.split("\n")
+            for var in variables:
+                if var!="":
+                    key, value = var.split("=")
+                    if key == "USERNAME":
+                        gUsername = value
+                    elif key == "IS_DEBUG":
+                        gIsDebug = (value=="True")
+                    elif key == "IS_LOCAL":
+                        gIsLocal = (value=="True")
+                    elif key == "IS_VIRTUALAI":
+                        gIsVirtualAI = (value=="True")
+                    elif key == "ENGINE":
+                        gName = value
+                    elif key == "S3_BUCKET":
+                        gS3Bucket = value
+                    elif key == "VAI_ID":
+                        gVAIToken = value
+                    elif key == "VAI_SECRET":
+                        gVAISecret = value
+                    elif key == "AWS_ACCESS_KEY_ID":
+                        AWSID = value
+                    elif key == "AWS_ACCESS_KEY_SECRET":
+                        AWSSecret = value
+        except Exception as err: 
+            consoleLog({"msg": f'No env file {_filename}'})
 
     # overload with env settings if any
+    print(f'=> Setting env vars from ENV...')
+    if os.environ.get('IS_DEBUG'):
+        _isDebug=(os.environ.get('IS_DEBUG')=="True")
+        if _isDebug!=gIsDebug:
+            print(f'=> is DEBUG updated to {_isDebug} from ENV var')
+            gIsDebug=_isDebug
     if os.environ.get('IS_LOCAL'):
         _isLocal=(os.environ.get('IS_LOCAL')=="True")
         if _isLocal!=gIsLocal:
-            print(f'is Local updated to {_isLocal} from ENV var')
+            print(f'=> is Local updated to {_isLocal} from ENV var')
             gIsLocal=_isLocal
     if os.environ.get('IS_VIRTUALAI'):
         _isVirtualAI=(os.environ.get('IS_VIRTUALAI')=="True")
         if _isVirtualAI!=gIsVirtualAI:
-            print(f'is Virtual updated to {_isVirtualAI} from ENV var')
+            print(f'=> is Virtual updated to {_isVirtualAI} from ENV var')
             gIsVirtualAI=_isVirtualAI
     if os.environ.get('ENGINE'):
         _name=os.environ.get('ENGINE')
         if _name!=gName:
-            print(f'Engine name updated to {_name} from ENV var')
+            print(f"=> Engine name updated to '{_name}' from ENV var")
             gName=_name
     if os.environ.get('S3_BUCKET'):
         _s3=os.environ.get('S3_BUCKET')
         if _s3!=gS3Bucket:
-            print(f'Set S3 bucket to {_s3} from ENV var')
+            print(f"=> Set S3 bucket to '{_s3}' from ENV var")
             gS3Bucket=_s3
     if os.environ.get('USERNAME') and gUsername==None:
         gUsername=os.environ.get('USERNAME')
+    if os.environ.get('VAI_ID') and gVAIToken==None:
+        gVAIToken=os.environ.get('VAI_ID')
+    if os.environ.get('VAI_SECRET') and gVAISecret==None:
+        gVAISecret=os.environ.get('VAI_SECRET')
     if os.environ.get('AWS_ACCESS_KEY_ID') and AWSID==None:
         AWSID=os.environ.get('AWS_ACCESS_KEY_ID')
     if os.environ.get('AWS_ACCESS_KEY_SECRET') and AWSSecret==None:
@@ -603,13 +638,20 @@ def osais_getEnv(_filename):
             aws_secret_access_key=AWSSecret
         )
         gS3 = gAWSSession.resource('s3')
-        print(f'Logged into AWS S3')
+        print(f'=> Logged into AWS S3')
         
+    if gIsDebug: 
+        gOriginOSAIS="http://"+gIPLocal+":3022/"
+    else:
+        gOriginOSAIS="https://opensourceais.com/"
+
     return {
+        "name": gName,
+        "osais": gOriginOSAIS,
         "username": gUsername,
         "isLocal": gIsLocal,
         "isVirtualAI": gIsVirtualAI,
-        "name": gName
+        "isDebug": gIsDebug
     }
 
 ## ------------------------------------------------------------------------
@@ -646,7 +688,7 @@ def _getOutputDir():
     global gArgsOSAIS
     global gOutputDir
 
-    if gArgsOSAIS!=None:
+    if gArgsOSAIS!=None and  gArgsOSAIS.outdir!=None:
         return gArgsOSAIS.outdir
     return gOutputDir
 
@@ -681,6 +723,11 @@ def _argsFromFilter(_originalArgs, _aFilter, _bKeep):
 def _clearDir():
     clearOldFiles(gInputDir)
     clearOldFiles(gOutputDir)
+
+## PUBLIC - running in docker?
+def osais_isDocker() :
+    global gIsDocker
+    return gIsDocker
 
 ## PUBLIC - info about harware this AI is running on
 def osais_getHarwareInfo() :
@@ -729,7 +776,7 @@ def osais_getInfo() :
 ## ------------------------------------------------------------------------
 
 # notify the gateway of our AI config file
-def _notifyGateway() : 
+def _connectWithGateway() : 
     global gName
     global gOriginGateway
 
@@ -756,139 +803,84 @@ def osais_resetGateway(_localGateway):
     global gOriginGateway
     gOriginGateway=_localGateway
     try:
-        _notifyGateway()
+        _connectWithGateway()
     except Exception as err:
         consoleLog({"msg":"Could not reset connection to Gateway"})
         raise err
     
-    print("=> This AI is reset to talk to Gateway "+_localGateway)
     return True
 
 ## ------------------------------------------------------------------------
 #       authenticate into OSAIS as virtual AI
 ## ------------------------------------------------------------------------
 
-# Register our VAI into OSAIS
-def _registerVAI(_originOSAIS):
+# Authenticate into OSAIS as a VAI
+def _loginVAI(_originOSAIS, _token, _secret):
     global gName
-    global gToken
-    global gSecret
-    global gOriginOSAIS
-    global gTokenLocal
-    global gSecretLocal
-    global gOriginLocalOSAIS
-    global gIsLocal
-
-    headers = {
-        "Content-Type": 'application/json', 
-        'Accept': 'text/plain',
-    }
-    objParam=_getFullConfig(gName)
-
-    ## our AI is on AWS
-    if gIsLocal==False:
-        # make it call the OSAIS that was requested to call (prod or local)
-        isProdToProd=(_originOSAIS==None)
-        if _originOSAIS==None:
-            _originOSAIS=gOriginOSAIS
-        try:
-            response = requests.post(f"{_originOSAIS}api/v1/public/virtualai/register", headers=headers, data=json.dumps(objParam))
-            objRes=response.json()["data"]
-            if objRes is None:
-                print("COULD NOT REGISTER, stopping it here")
-                sys.exit()
-
-            if isProdToProd:
-                gToken=objRes["token"]
-                gSecret=objRes["secret"]
-            else :
-                gTokenLocal=objRes["token"]
-                gSecretLocal=objRes["secret"]
-
-            print("We are REGISTERED with OSAIS Prod")
-        except Exception as err:
-            consoleLog({"msg":"Exception raised while trying to register to PROD"})
-            raise err
-
-    ## our AI is local, reg with Local OSAIS (debug)
-    else:
-        try:
-            response = requests.post(f"{gOriginLocalOSAIS}api/v1/public/virtualai/register", headers=headers, data=json.dumps(objParam))
-            objRes=response.json()["data"]
-            if objRes is None:
-                print("COULD NOT REGISTER with debug")
-
-            gTokenLocal=objRes["token"]
-            gSecretLocal=objRes["secret"]
-            print("We are REGISTERED with OSAIS Local (debug)")
-        except Exception as err:
-            consoleLog({"msg":"Exception raised while trying to register to DEBUG"})
-            raise err
-
-    return True
-
-# Authenticate into OSAIS
-def _loginVAI(_originOSAIS):
-    global gToken
-    global gSecret
-    global gAuthToken
-    global gTokenLocal
-    global gSecretLocal
-    global gAuthTokenLocal
 
     headers = {
         "Content-Type": "application/json"
     }
 
-    if gToken!= None:
-        try:
-            response = requests.post(f"{gOriginOSAIS}api/v1/public/virtualai/login", headers=headers, data=json.dumps({
-                "token": gToken,
-                "secret": gSecret
-            }))
+    try:
+        response = requests.post(f"{_originOSAIS}api/v1/public/virtualai/login", headers=headers, data=json.dumps({
+            "token": _token,
+            "secret": _secret
+        }))
 
-            objRes=response.json()["data"]
-            if objRes is None:
-                print("COULD NOT LOGIN, stopping it here")
-                sys.exit()
-            print("We got an authentication token into OSAIS")
-            gAuthToken=objRes["authToken"]    
-        except Exception as err:
-            consoleLog({"msg":"Exception raised while trying to login to PROD"})
-            raise err
+        objRes=response.json()["data"]
+        if objRes is None:
+            consoleLog({"msg": "COULD NOT LOGIN into "+_originOSAIS+", stopping it here"})
+            sys.exit()
+        return objRes["authToken"]    
+    except Exception as err:
+        consoleLog({"msg":"Exception raised while trying to login as VAI into "+_originOSAIS})
+        raise err
 
-    if gTokenLocal!= None:
-        if _originOSAIS==None:
-            _originOSAIS=gOriginLocalOSAIS
-        try:
-            response = requests.post(f"{_originOSAIS}api/v1/public/virtualai/login", headers=headers, data=json.dumps({
-                "token": gTokenLocal,
-                "secret": gSecretLocal
-            }))
+## call OSAIS to update Virt AI config
+def _updateVAIConfig(): 
+    global gName
+    global gOriginOSAIS
+    global gVAIAuthToken
 
-            objRes=response.json()["data"]
-            if objRes is None:
-                print("COULD NOT LOGIN into OSAIS Local")
-            print("We got an authentication token into OSAIS Local (debug)")
-            gAuthTokenLocal=objRes["authToken"]    
-        except Exception as err:
-            return True
+    objParam=_getFullConfig(gName)
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {gVAIAuthToken}"
+    }
 
-    return True
+    try:
+        response = requests.patch(f"{gOriginOSAIS}api/v1/private/virtualai/config", headers=headers, data=json.dumps({
+            "jsonEngine": objParam["config_ai"],
+        }))
+
+        objRes=response.json()["data"]
+        if objRes is None:
+            consoleLog({"msg": "COULD NOT UPDATE CONFIG"})
+            return False
+        else:
+            print("=> We patched VAI config of OSAIS at "+gOriginOSAIS)
+        return True
+    except Exception as err:
+        consoleLog({"msg":"Exception raised while trying to update VAI config into "+gOriginOSAIS})
+        return False
 
 ## PUBLIC - Authenticate the Virtual AI into OSAIS
-def osais_authenticateAI(_originOSAIS):
+def osais_authenticateAI():
     global gIsVirtualAI
     global gOriginOSAIS
     global gIsScheduled
-    global gDemoID
-    global gDemoSecret
-    
+    global gVAIToken
+    global gVAISecret
+    global gVAIAuthToken
+
     resp={"data": None}
     if gIsVirtualAI:
         try:
-            resp= _registerVAI(_originOSAIS)
-            resp=_loginVAI(_originOSAIS)
+            ## login as VAI 
+            gVAIAuthToken=_loginVAI(gOriginOSAIS, gVAIToken, gVAISecret)
+            _updateVAIConfig()
+
         except Exception as err:
             consoleLog({"msg":"Exception raised while trying to authenticate to OSAIS"})
             raise err
@@ -904,100 +896,78 @@ def osais_authenticateAI(_originOSAIS):
 #       authenticate into OSAIS as Client (user)
 ## ------------------------------------------------------------------------
 
-def getClientInfo(_authToken):
+## get info about this authenticated CLIENT
+def getClientInfo():
     global gOriginOSAIS
-    global gOriginLocalOSAIS
 
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {_authToken}"
+        "Authorization": f"Bearer {gClientAuthToken}"
     }
 
     objRes=None
-    if gIsLocal:        # if local 
-        try:
-            response = requests.get(f"{gOriginLocalOSAIS}api/v1/private/client", headers=headers)
-            objRes=response.json()["data"]            
-        except Exception as err:
-            return {"data": objRes}
-    else:    
-        try:
-            response = requests.get(f"{gOriginOSAIS}api/v1/private/client", headers=headers)
-            objRes=response.json()["data"]            
-        except Exception as err:
-            return {"data": objRes}
+    try:
+        response = requests.get(f"{gOriginOSAIS}api/v1/private/client", headers=headers)
+        objRes=response.json()["data"]            
+    except Exception as err:
+        return {"data": objRes}
 
     return {"data": objRes}
-            
+
+## token of the authenticated CLIENT
+def osais_getClientID(): 
+    return gClientID
+
+## authenticate as a CLIENT
+def _authenticateClient(_route, _id, _secret):
+    headers = {
+        "Content-Type": "application/json"
+    }
+    try:
+        url=f"{_route}api/v1/public/client/demo"      ## get a demo auth token
+        if _id!= None:
+            url=f"{_route}api/v1/public/client/login"
+        response = requests.post(url, headers=headers, data=json.dumps({
+            "token": _id,
+            "secret": _secret
+        }))
+
+        objRes=response.json()["data"]
+        if objRes is None:
+            consoleLog({"msg": "COULD NOT LOGIN AS CLIENT into "+_route})
+        resp={"data": {
+            "token": objRes["token"],
+            "authToken": objRes["authToken"],
+        }}
+        return resp
+
+    except Exception as err:
+        consoleLog({"msg":"Exception raised while trying to login as CLIENT into "+_route})
+        resp={"data": {
+            "token": None,
+            "authToken": None
+        }}
 
 # Authenticate into OSAIS (as client)
 def osais_authenticateClient(_id, _secret):
     global gOriginOSAIS
-    global gOriginLocalOSAIS
     global gClientAuthToken
-    global gClientAuthTokenLocal
+    global gClientID
     global gIsLocal
 
-    authToken=None
-
-    headers = {
-        "Content-Type": "application/json"
-    }
     resp={"data": None}
-    if gIsLocal:        # if local ... log as client into debug
-        try:
-            url=f"{gOriginLocalOSAIS}api/v1/public/client/demo"      ## get a demo auth token
-            if _id!= None:
-                url=f"{gOriginLocalOSAIS}api/v1/public/client/login"
-            response = requests.post(url, headers=headers, data=json.dumps({
-                "token": _id,
-                "secret": _secret
-            }))
-
-            objRes=response.json()["data"]
-            if objRes is None:
-                print("COULD NOT LOGIN AS CLIENT into OSAIS Local")
-            print("We got a CLIENT authentication token into OSAIS Local (debug)")
-            gClientAuthTokenLocal=objRes["authToken"]
-            authToken=gClientAuthTokenLocal
-            resp={"data": {
-                "token": objRes["token"],
-                "authToken": gClientAuthTokenLocal,
-            }}
-
-        except Exception as err:
-            ## no big deal
-            gClientAuthTokenLocal=None
-
-    else:       # else ... log as client into prod        
-        try:
-            url=f"{gOriginOSAIS}api/v1/public/client/demo"      ## get a demo auth token
-            if _id!= None:
-                url=f"{gOriginOSAIS}api/v1/public/client/login"
-            response = requests.post(url, headers=headers, data=json.dumps({
-                "token": _id,
-                "secret": _secret
-            }))
-
-            objRes=response.json()["data"]
-            if objRes is None:
-                print("COULD NOT LOGIN AS CLIENT, stopping it here")
-                sys.exit()
-            print("We got a CLIENT authentication token into OSAIS")
-            gClientAuthToken=objRes["authToken"]    
-            authToken=gClientAuthToken
-            resp={"data": {
-                "token": objRes["token"],
-                "authToken": gClientAuthToken,
-            }}
-
-        except Exception as err:
-            consoleLog({"msg":"Exception raised while trying to login as CLIENT to PROD"})
-            gClientAuthToken=None
-
-    dataClient=getClientInfo(authToken)
+    
+    ## log as client into osais
+    resp=_authenticateClient(gOriginOSAIS, _id, _secret)
+    gClientAuthToken=resp["data"]["authToken"]
+    gClientID=resp["data"]["token"]
+        
+    dataClient=getClientInfo()
     resp["data"]["user"]=dataClient["data"]["user"]
     return resp 
+
+def authenticateClientAsDemo():
+    return osais_authenticateClient(None, None)
 
 ## ------------------------------------------------------------------------
 #       ask OSAIS to process a request
@@ -1005,19 +975,12 @@ def osais_authenticateClient(_id, _secret):
 
 def osais_postRequest(objReq):
     global gClientAuthToken
-    global gClientAuthTokenLocal
-    global gIsLocal
     global gName
 
     resp={"data": None}
     _url=None
-    _authToken=None
-    if gIsLocal:
-        _authToken=gClientAuthTokenLocal
-        _url=f"{gOriginLocalOSAIS}api/v1/private/client/ai/"+objReq.gName
-    else:
-        _authToken=gClientAuthToken
-        _url=f"{gOriginOSAIS}api/v1/private/client/ai/"+objReq.gName
+    _authToken=gClientAuthToken
+    _url=f"{gOriginOSAIS}api/v1/private/client/ai/"+objReq.gName
 
     try:
         response = requests.post(_url, headers={
@@ -1027,7 +990,7 @@ def osais_postRequest(objReq):
         }, data=json.dumps(objReq))
         objRes=response.json()["data"]
         if objRes is None:
-            print("COULD NOT post request")
+            consoleLog({"msg": "COULD NOT post request"})
         resp={"data": objRes}
 
     except Exception as err:
@@ -1062,7 +1025,7 @@ def osais_initParser(aArg):
     vq_parser.add_argument("-warmup", "--warmup", type=bool, help="warmup", default=False, dest='warmup')
 
     gArgsOSAIS = vq_parser.parse_args(aArg)
-    gIsWarmup=gArgsOSAIS.warmup
+    gIsWarmup=(gArgsOSAIS.warmup==True or gArgsOSAIS.warmup=="True")
     return True
 
 ## PUBLIC - run the AI (at least try)
@@ -1072,7 +1035,6 @@ def osais_runAI(*args):
     global gName 
     global gLastProcessStart_at
     global gOriginOSAIS
-    global gOriginLocalOSAIS
     global gIsLocal
 
     ## get args
@@ -1082,15 +1044,18 @@ def osais_runAI(*args):
     ## do not process twice same uid
     _uid=_args.get('-uid')
     if _uid in gAProcessed:
-        return  "not processing, already tried..."
-
+        consoleLog({"msg": "Not processing "+str(_uid)+", already tried!"})
+        return  None
+    
     ## where is the caller?
     _orig=None
     try: 
         if _args["-orig"]:
             _orig=_args["-orig"]
+            print("=> origin set to "+_orig)
     except:
         _orig=None
+        print("=> origin set to Default")
 
     ## start time
     gIsBusy=True
@@ -1098,28 +1063,44 @@ def osais_runAI(*args):
 
     ## reprocess AI args
     aArgForparserAI=_getArgs(_args)
-    args_ExclusiveOSAIS=['-orig', '-t', '-u', '-uid', '-local', '-cycle', '-warmup']
+    args_ExclusiveOSAIS=['-orig', '-t', '-u', '-uid', '-local', '-cycle', '-warmup', "-filename"]
     aArgForparserAI=_argsFromFilter(aArgForparserAI, args_ExclusiveOSAIS, False)
 
     ## process the filename passed in dir (case localhost / AI Gateway), or download file from URL (case AI running as Virtual AI)
     _input=None
-    _filename=_args.get('-filename')
-    _urlUpload=_args.get('url_upload')
+    _filename=None
+    _urlUpload=None
+    try:
+        ## the filename of the locally downloaded "url_upload" url 
+        _filename=_args.get('-filename')
+    except Exception as err:
+        consoleLog({"msg":"did not get a filename"})
+        raise err
+    
+    try:
+        _urlUpload=_args.get('url_upload')
+    except Exception as err:
+        consoleLog({"msg":"did not get an upload url"})
+        raise err
+
+    # only a urlUpload? => we need to download the file 
+    # note that lots can fail with 403 on download image from ext API, so we shall avoid this
     if not _filename and _urlUpload:
         try:
-            _input=downloadImage(_urlUpload)
+            _input=osais_downloadImage(_urlUpload)
             if _input:
                 aArgForparserAI.append("-filename")
                 aArgForparserAI.append(_input)
+                print("=> downloaded file "+_urlUpload)
             else:
                 ## min requirements
-                print("no image to process")
-                return "input required"
+                consoleLog({"msg":"no file to process"})
+                return None
         except Exception as err:
             gIsBusy=False
             consoleLog({"msg":"Could not download image"})
             raise err
-    
+
     ## Init OSAIS Params (from all args, keep only those for OSAIS)
     aArgForParserOSAIS=_getArgs(_args)
     args_ExclusiveOSAIS.append('-odir')
@@ -1127,16 +1108,16 @@ def osais_runAI(*args):
     aArgForParserOSAIS=_argsFromFilter(aArgForParserOSAIS, args_ExclusiveOSAIS, True)
     osais_initParser(aArgForParserOSAIS)
 
+    if gIsWarmup:
+        print("=> Warming up...")
+    else:
+        print("=> before run: processed args from url: "+str(aArgForparserAI)+"\r\n")
+
     ## notify OSAIS (Req received)
     CredsParam=getCredsParams()
     MorphingParam=getMorphingParams()
     StageParam=getStageParams(AI_PROGRESS_REQRECEIVED, 0)
     osais_notify(_orig, CredsParam, MorphingParam , StageParam)
-
-    if gIsWarmup:
-        print("\r\n=> Warming up... \r\n")
-    else:
-        print("\r\n=> before run: processed args from url: "+str(aArgForparserAI)+"\r\n")
 
     ## processing accepted
     gLastProcessStart_at=datetime.utcnow()
@@ -1149,7 +1130,7 @@ def osais_runAI(*args):
     ## start watch file creation
     _output=_getOutputDir()
     watch_directory(_output, osais_onNotifyFileCreated, _args)
-
+    
     ## Notif OSAIS
     StageParam=getStageParams(AI_PROGRESS_INIT_IMAGE, 0)
     osais_notify(_orig, CredsParam, MorphingParam , StageParam)
@@ -1235,25 +1216,40 @@ def getStageParams(_stage, _cost) :
 ## ------------------------------------------------------------------------
 
 # Upload image to OSAIS 
-def _uploadImageToOSAIS(_origin, objParam, isLocal):
+def _uploadImageToOSAIS(_origin, objParam):
     if gIsVirtualAI==False:
         return None
     
-    global gAuthToken
-    global gAuthTokenLocal
+    global gVAIAuthToken
     
-    _auth=gAuthToken
-    if isLocal:
-        _auth=gAuthTokenLocal
-
     # lets go call OSAIS AI Gateway / or OSAIS itself
     headers = {
         "Content-Type": 'application/json', 
         'Accept': 'text/plain',
-        "Authorization": f"Bearer {_auth}"
+        "Authorization": f"Bearer {gVAIAuthToken}"
     }
 
     api_url=f"{_origin}api/v1/private/virtualai/upload"        
+    payload = json.dumps(objParam)
+    response = requests.post(api_url, headers=headers, data=payload )
+    objRes=response.json()
+    return objRes    
+
+# Upload image to a local gateway
+def _uploadImageToGateway(_origin, objParam):
+    if gIsVirtualAI==False:
+        return None
+    
+    global gVAIAuthToken
+    
+    # lets go call OSAIS AI Gateway / or OSAIS itself
+    headers = {
+        "Content-Type": 'application/json', 
+        'Accept': 'text/plain',
+        "Authorization": f"Bearer {gVAIAuthToken}"
+    }
+
+    api_url=f"{_origin}api/v1/public/upload"        
     payload = json.dumps(objParam)
     response = requests.post(api_url, headers=headers, data=payload )
     objRes=response.json()
@@ -1276,13 +1272,39 @@ def osais_onNotifyFileCreated(_dir, _filename, _args):
     osais_notify(_orig, _credsParam, _morphingParam, _stageParam)            # OSAIS Notification
     return True
 
+def _notifyGateway(_origin, objParam):
+    headers = {
+        "Content-Type": "application/json"
+    }
+    api_url=f"{_origin}api/v1/public/notify"
+    try: 
+        response = requests.post(api_url, headers=headers, data=json.dumps(objParam))
+        objRes=response.json()
+        return objRes
+    except Exception as err:
+            raise err
+
+def _notifyOSAIS(objParam):
+    global gOriginOSAIS
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {gVAIAuthToken}"
+    }
+    api_url=f"{gOriginOSAIS}api/v1/private/virtualai/notify"
+    try: 
+        response = requests.post(api_url, headers=headers, data=json.dumps(objParam))
+        objRes=response.json()
+        return objRes
+    except Exception as err:
+            raise err
+
 # Direct Notify OSAIS 
 def osais_notify(_origin, CredParam, MorphingParam, StageParam):
     global gIPLocal
     global gPortGateway
     global gIsVirtualAI
-    global gAuthToken
-    global gAuthTokenLocal
+    global gIsLocal
+    global gVAIAuthToken
     global gLastChecked_at
     global gIsWarmup
 
@@ -1296,31 +1318,10 @@ def osais_notify(_origin, CredParam, MorphingParam, StageParam):
     merged = dict()
     merged.update(CredParam)
     merged.update(MorphingParam)
-    print("NotifyOSAIS ("+str(StageParam["stage"])+"/ "+StageParam["descr"]+"): "+str(merged))
-    print("\r\n")
 
     _filename=""
     if MorphingParam["filename"]!="":
         _filename=MorphingParam["filename"]
-
-    # lets go call OSAIS AI Gateway / or OSAIS itself
-    headers = {
-        "Content-Type": "application/json"
-    }
-
-    ## config for calling gateway
-    api_url = f"{_origin}api/v1/public/notify"
-
-    ## config for calling OSAIS (no gateway)
-    if gIsVirtualAI:
-        _auth=gAuthToken
-
-        if CredParam["isLocal"]:
-            _auth=gAuthTokenLocal
-
-        if gIsVirtualAI==True:
-            headers["Authorization"]= f"Bearer {_auth}"
-            api_url=f"{_origin}api/v1/private/virtualai/notify"
 
     objParam={
         "response": {
@@ -1337,9 +1338,24 @@ def osais_notify(_origin, CredParam, MorphingParam, StageParam):
 
     if "cost" in StageParam:
         objParam["response"]["cost"]= str(StageParam["cost"])
-    
-    response = requests.post(api_url, headers=headers, data=json.dumps(objParam) )
-    objRes=response.json()
+
+    ## Notify OSAIS (as Virtual AI)
+    if gIsVirtualAI:
+        try: 
+            objRes=_notifyOSAIS(objParam)
+            _at=objRes["data"]["notified_at"]
+            print("\r\n ["+_at+"] => Notified OSAIS ("+str(StageParam["stage"])+"/ "+StageParam["descr"]+"): "+str(merged)+ " on: "+api_url)
+        except:
+            consoleLog({"msg": "Failed to notify stage ("+str(StageParam["stage"])+ " to OSAIS"})
+
+    ## Notify Gateway (as Local AI)
+    if gIsLocal:
+        try: 
+            objRes=_notifyGateway(_origin, objParam)
+            _at=objRes["data"]["notified_at"]
+            print("\r\n ["+_at+"] => Notified Gateway ("+str(StageParam["stage"])+"/ "+StageParam["descr"]+"): "+str(merged)+ " on: "+api_url)
+        except:
+            consoleLog({"msg": "Failed to notify stage ("+str(StageParam["stage"])+ " to local Gateway "+_origin})
 
     if StageParam["stage"]==AI_PROGRESS_DONE_IMAGE:
         if gIsVirtualAI==True:
@@ -1358,7 +1374,10 @@ def osais_notify(_origin, CredParam, MorphingParam, StageParam):
                 "cycle": str(MorphingParam["cycle"]),
                 "engine": CredParam["engine"],
             }            
-            _uploadImageToOSAIS(_origin, param, CredParam["isLocal"])
+            if CredParam["isLocal"]:
+                _uploadImageToGateway(_origin, param)
+            else:
+                _uploadImageToOSAIS(_origin, param)
     return objRes
 
 ## ------------------------------------------------------------------------
@@ -1366,20 +1385,15 @@ def osais_notify(_origin, CredParam, MorphingParam, StageParam):
 ## ------------------------------------------------------------------------
 
 ## PUBLIC - resetting who this AI is talking to (OSAIS prod and dbg)
-def osais_resetOSAIS(_locationProd, _localtionDebug):
+def osais_resetOSAIS(_location):
     global gOriginOSAIS
-    global gOriginLocalOSAIS
-    gOriginOSAIS=_locationProd
-    gOriginLocalOSAIS=_localtionDebug
-    if _locationProd!=None:
-        print("=> This AI is reset to talk to PROD "+gOriginOSAIS)
-    if _localtionDebug!=None:
-        print("=> This AI is reset to talk to DEBUG "+gOriginLocalOSAIS+"\r\n")
+    gOriginOSAIS=_location
     return True
 
 ## PUBLIC - Init the Virtual AI
-def osais_initializeAI():
+def osais_initializeAI(_envFile):
     global gIsDocker
+    global gIsDebug
     global gIsLocal
     global gIsVirtualAI
     global gUsername
@@ -1391,18 +1405,11 @@ def osais_initializeAI():
     global gIPLocal
     global gExtIP
     global gOriginGateway
-    global gAuthToken
-    global gAuthTokenLocal
+    global gVAIAuthToken
     global gOriginOSAIS
-    global gOriginLocalOSAIS
+    global gClientAuthToken
 
     ## load env 
-    _envFile="env_local"
-    if gIsDocker:
-        _envFile="env_docker"
-        print("\r\n=> in Docker\r\n")
-    else:
-        print("\r\n=> NOT in Docker\r\n")        
     obj=osais_getEnv(_envFile)
     gIsLocal=obj["isLocal"]
     gIsVirtualAI=obj["isVirtualAI"]
@@ -1414,16 +1421,6 @@ def osais_initializeAI():
     gPortAI = gConfig["port"]
     gVersion = gConfig["version"]
 
-    print("\r\n===== Config =====")
-    print("engine: "+str(gName) + " v"+str(gVersion))
-    print("is Local: "+str(gIsLocal))
-    print("is Virtual: "+str(gIsVirtualAI))
-    print("username: "+str(gUsername))
-    if gIsLocal:
-        print("location (local): "+str(gIPLocal)+":"+str(gPortAI))
-    else: 
-        print("location (external): "+str(gExtIP)+":"+str(gPortAI))
-    print("===== /Config =====\r\n")
 
     ## make sure we have a config file
     _loadConfig(gName)
@@ -1432,35 +1429,61 @@ def osais_initializeAI():
     gOriginGateway=f"http://{gIPLocal}:{gPortGateway}/"         ## config for local gateway (local and not virtual)
 
     ## we set OSAIS location in all cases (even if in gateway) because this AI can generate it s own page for sending reqs (needs a client logged into OSAIS)
-    if gIsLocal:
-        osais_resetOSAIS(None, f"http://{gIPLocal}:{gPortLocalOSAIS}/")
+    if gIsDebug:
+        osais_resetOSAIS(f"http://{gIPLocal}:{gPortLocalOSAIS}/")
     else:
-        osais_resetOSAIS("https://opensourceais.com/", None)
+        osais_resetOSAIS("https://opensourceais.com/")
     if gIsVirtualAI:
         try:
-            osais_authenticateAI(None)
+            osais_authenticateAI()
         except Exception as err:
             print("=> CRITICAL: Could not connect virtual AI "+gName+ " to OSAIS")
             return None
-
-        if gAuthToken!=None:
-            print("=> Running "+gName+" AI as a virtual AI connected to: "+gOriginOSAIS)
-        if gAuthTokenLocal!=None:
-            print("=> Running "+gName+" AI as a virtual AI connected to: "+gOriginLocalOSAIS)
-    else:
+    
+    if gIsLocal:
         try:
             osais_resetGateway(gOriginGateway)
-            print("=> Running "+gName+" AI as a server connected to local Gateway "+gOriginGateway)
-        
         except Exception as err:
             print("CRITICAL: could not notify Gateway at "+gOriginGateway)
             return None
 
+    dataClient=authenticateClientAsDemo()
+
     ## init default cost
     _initializeCost()
 
-    print("\r\n")
-    return gName
+    ## output the config we are runing on
+    print("\r\n<===== Config =====>\r\n")
+    print("=> engine:                  "+str(gName) + " v"+str(gVersion))
+    if gIsDocker:
+        print("=> in Docker:               True")
+    else:
+        print("=> in Docker:               False")
+    print("=> is Debug:                "+str(gIsDebug))
+    print("\r\n=> is Local:                "+str(gIsLocal))
+    if gIsLocal:
+        print(" > gateway:                 "+gOriginGateway)
+        print(" > local AI location:       "+str(gIPLocal)+":"+str(gPortAI))
+    print("\r\n=> is Virtual:              "+str(gIsVirtualAI))
+    if gIsVirtualAI:
+        print(" > virtAI location (ext.):  "+str(gExtIP)+":"+str(gPortAI))
+        print(" > OSAIS location:          "+gOriginOSAIS)
+        if gVAIAuthToken!=None:
+            print(" > is connected to OSAIS:   True")
+        else:
+            print(" > is connected to OSAIS:   False")
+    if gClientAuthToken!=None:
+        print("\r\n=> is connected as Client:  True")
+        print(" > client ID:               "+dataClient["data"]["token"])
+    else:
+        print("\r\n=> is connected as Client:  False")
+    print("\r\n=> Pay to owner:            "+str(gUsername))
+    print("\r\n<===== /Config =====>\r\n")
+
+    return {
+        "engine":gName,
+        "client": dataClient["data"]
+    }
 
 ## ------------------------------------------------------------------------
 #       Starting point of Lib
@@ -1472,4 +1495,10 @@ watch_directory=start_observer_thread(_getOutputDir(), osais_onNotifyFileCreated
 #cleaning dir every 10min
 schedule.every(10).minutes.do(_clearDir)
 
-print("\r\nPython OSAIS Lib is loaded...")
+#login into OSAIS as client every 24h
+schedule.every(3600).minutes.do(authenticateClientAsDemo)
+
+#login as VAI every 24h +1min
+schedule.every(3601).minutes.do(osais_authenticateAI)
+
+print("\r\n=> Python OSAIS Lib is loaded...")
