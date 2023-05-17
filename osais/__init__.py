@@ -1,7 +1,7 @@
 """
 A package for OSAIS virtual AI.
 """
-__version__="1.0.43"
+__version__="1.0.44"
 __author__ = "incubiq"
 __email__ = "eric@incubiq.com"
 
@@ -14,7 +14,8 @@ from .osais import osais_getEnv
 from .osais import osais_getHarwareInfo
 from .osais import osais_getDirectoryListing
 from .osais import osais_downloadImage
-from .osais import osais_uploadeFileToS3
+from .osais import osais_uploadFileToS3
+from .osais import osais_downloadFileFromS3
 from .osais import osais_getInfo
 from .osais import osais_getClientID
 from .osais import osais_resetGateway

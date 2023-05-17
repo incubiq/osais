@@ -1,5 +1,5 @@
 
-__version__="1.0.43"
+__version__="1.0.44"
 
 ## ========================================================================
 ## 
@@ -42,10 +42,7 @@ class NewFileHandler(FileSystemEventHandler):
         if event.event_type == 'created':
             ## only notify if uid in the filename (otherwise we are getting notified of another AI's job !)
             if self._args["-uid"] in event.src_path:
-                self.fnOnFileCreated(os.path.dirname(event.src_path), os.path.basename(event.src_path), self._args)
-
-                ## also send to S3
-                osais_uploadeFileToS3(event.src_path, "output/")
+                self.fnOnFileCreated(os.path.dirname(event.src_path)+"/", os.path.basename(event.src_path), self._args)
 
 def start_observer_thread(path, fnOnFileCreated, _args):
 
@@ -324,8 +321,21 @@ def getHostInfo(_engine):
 #       File / Image utils
 ## ------------------------------------------------------------------------
 
+def getS3BucketRoot () :
+    return "s3://osais/"
+
+def getS3BucketInputDir () :
+    return "input/"
+
+def getS3BucketOutputDir () :
+    return "output/"
+
 ## downloads an image as file from external URL
 def osais_downloadImage(url) :
+    root=getS3BucketRoot()
+    if root in url:
+        return osais_downloadFileFromS3(url, gInputDir)
+
     import urllib.request
 
     # Determine the file name and extension of the image based on the URL.
@@ -345,7 +355,26 @@ def osais_downloadImage(url) :
 
     return f"{local_filename}{file_extension}"
 
-def osais_uploadeFileToS3(_filename, _dirS3): 
+def osais_uploadFileToS3(_filename, _dirS3): 
+    global gS3
+    global gS3Bucket
+    root=getS3BucketRoot()
+    if gS3!=None:
+        try:
+            # Filename - File to upload
+            # Bucket - Bucket to upload to (the top level directory under AWS S3)
+            # Key - S3 object name (can contain subdirectories). If not specified then file_name is used
+            _baseName=os.path.basename(_filename)
+            gS3.meta.client.upload_file(Filename=_filename, Bucket=gS3Bucket, Key=_dirS3+_baseName)
+            return root+_dirS3+_baseName
+            
+        except Exception as err:
+            consoleLog({"msg":"Could not upload file to S3"})
+            raise err
+        
+    return False
+
+def osais_downloadFileFromS3(_filePath, _dir): 
     global gS3
     global gS3Bucket
 
@@ -354,13 +383,17 @@ def osais_uploadeFileToS3(_filename, _dirS3):
             # Filename - File to upload
             # Bucket - Bucket to upload to (the top level directory under AWS S3)
             # Key - S3 object name (can contain subdirectories). If not specified then file_name is used
-            gS3.meta.client.upload_file(Filename=_filename, Bucket=gS3Bucket, Key=_dirS3+os.path.basename(_filename))
-            return True
+            _baseName=os.path.basename(_filePath)
+            local_file_path = _dir+_baseName
+
+            gS3.Bucket(gS3Bucket).download_file(_filePath, local_file_path)
+            return local_file_path
         except Exception as err:
-            consoleLog({"msg":"Could not upload file to S3"})
+            consoleLog({"msg":"Could not download file from S3"})
             raise err
         
     return False
+
 
 ## ========================================================================
 ## 
@@ -380,7 +413,7 @@ import base64
 from datetime import datetime
 import argparse
 
-##from osais import osais_initializeAI, osais_getInfo, osais_getHarwareInfo, osais_isDocker, osais_getClientID, osais_getDirectoryListing, osais_runAI, osais_authenticateAI, osais_isDebug, osais_authenticateClient, osais_postRequest, osais_downloadImage, osais_uploadeFileToS3
+##from osais import osais_initializeAI, osais_getInfo, osais_getHarwareInfo, osais_isDocker, osais_getClientID, osais_getDirectoryListing, osais_runAI, osais_authenticateAI, osais_isDebug, osais_authenticateClient, osais_postRequest, osais_downloadImage, osais_uploadFileToS3
 
 ## ------------------------------------------------------------------------
 #       all global vars
@@ -1013,19 +1046,22 @@ def osais_initParser(aArg):
     vq_parser = argparse.ArgumentParser(description='Arg parser init by OSAIS')
 
     # Add the AI Gateway / OpenSourceAIs arguments
-    vq_parser.add_argument("-orig",  "--origin", type=str, help="AI Gateway server origin", default=f"http://{gIPLocal}:{gPortGateway}/" , dest='OSAIS_origin')     ##  this is for comms with AI Gateway
-    vq_parser.add_argument("-t",  "--token", type=str, help="OpenSourceAIs token", default="0", dest='tokenAI')               ##  this is for comms with OpenSourceAIs
+    vq_parser.add_argument("-orig",  "--origin", type=str, help="Caller's origin", default=None , dest='OSAIS_origin')      ##  this is for comms with AI Gateway
+    vq_parser.add_argument("-t",  "--token", type=str, help="OpenSourceAIs token", default="0", dest='tokenAI')             ##  this is for comms with OpenSourceAIs
     vq_parser.add_argument("-u",  "--username", type=str, help="OpenSourceAIs username", default="", dest='username')       ##  this is for comms with OpenSourceAIs
     vq_parser.add_argument("-uid",  "--unique_id", type=int, help="Unique ID of this AI session", default=0, dest='uid')    ##  this is for comms with OpenSourceAIs
     vq_parser.add_argument("-odir", "--outdir", type=str, help="Output directory", default=gOutputDir, dest='outdir')
     vq_parser.add_argument("-idir", "--indir", type=str, help="input directory", default=gInputDir, dest='indir')
-    vq_parser.add_argument("-local", "--islocal", type=bool, help="is local or prod?", default=False, dest='isLocal')
     vq_parser.add_argument("-cycle", "--cycle", type=int, help="cycle", default=0, dest='cycle')
     vq_parser.add_argument("-filename", "--filename", type=str, help="filename", default="default", dest='filename')
     vq_parser.add_argument("-warmup", "--warmup", type=bool, help="warmup", default=False, dest='warmup')
 
     gArgsOSAIS = vq_parser.parse_args(aArg)
     gIsWarmup=(gArgsOSAIS.warmup==True or gArgsOSAIS.warmup=="True")
+    if gArgsOSAIS.OSAIS_origin!=None:
+        print("=> origin set to "+gArgsOSAIS.OSAIS_origin)
+    else:
+        print("=> origin set to None")
     return True
 
 ## PUBLIC - run the AI (at least try)
@@ -1047,59 +1083,41 @@ def osais_runAI(*args):
         consoleLog({"msg": "Not processing "+str(_uid)+", already tried!"})
         return  None
     
-    ## where is the caller?
-    _orig=None
-    try: 
-        if _args["-orig"]:
-            _orig=_args["-orig"]
-            print("=> origin set to "+_orig)
-    except:
-        _orig=None
-        print("=> origin set to Default")
-
-    ## start time
-    gIsBusy=True
-    beg_date = datetime.utcnow()
-
-    ## reprocess AI args
-    aArgForparserAI=_getArgs(_args)
-    args_ExclusiveOSAIS=['-orig', '-t', '-u', '-uid', '-local', '-cycle', '-warmup', "-filename"]
-    aArgForparserAI=_argsFromFilter(aArgForparserAI, args_ExclusiveOSAIS, False)
-
-    ## process the filename passed in dir (case localhost / AI Gateway), or download file from URL (case AI running as Virtual AI)
-    _input=None
-    _filename=None
-    _urlUpload=None
+    ## process the filename and download it locally
     try:
-        ## the filename of the locally downloaded "url_upload" url 
+        ## the filename of the locally downloaded "url_upload" url (or the S3 url)
         _filename=_args.get('-filename')
-    except Exception as err:
-        consoleLog({"msg":"did not get a filename"})
-        raise err
-    
-    try:
-        _urlUpload=_args.get('url_upload')
+
+        # if file was in S3, download it
+        _isFileInS3= getS3BucketRoot() in _filename
+        if _isFileInS3:
+            try:
+                # download the file locally, reset dir to ours
+                _basename=_filename[11:]
+                _filename=osais_downloadFileFromS3(_basename, gInputDir)
+                _args["-filename"]=os.path.basename(_filename)
+                _args["-idir"]=gInputDir
+                _args["-odir"]=gOutputDir
+
+            except Exception as err:
+                consoleLog({"msg":"Could not download image from S3"})
+                raise err
+        else:
+            if not _args["-warmup"]:
+                raise ValueError("CRITICAL: require a upload url in S3 ")
+                
     except Exception as err:
         consoleLog({"msg":"did not get an upload url"})
         raise err
 
-    # only a urlUpload? => we need to download the file 
-    # note that lots can fail with 403 on download image from ext API, so we shall avoid this
-    if not _filename and _urlUpload:
-        try:
-            _input=osais_downloadImage(_urlUpload)
-            if _input:
-                aArgForparserAI.append("-filename")
-                aArgForparserAI.append(_input)
-                print("=> downloaded file "+_urlUpload)
-            else:
-                ## min requirements
-                consoleLog({"msg":"no file to process"})
-                return None
-        except Exception as err:
-            gIsBusy=False
-            consoleLog({"msg":"Could not download image"})
-            raise err
+    ## start time
+    gIsBusy=True
+    beg_date = datetime.utcnow()
+    
+    ## reprocess AI args
+    aArgForparserAI=_getArgs(_args)
+    args_ExclusiveOSAIS=['-orig', '-t', '-u', '-uid', '-cycle', '-warmup']
+    aArgForparserAI=_argsFromFilter(aArgForparserAI, args_ExclusiveOSAIS, False)
 
     ## Init OSAIS Params (from all args, keep only those for OSAIS)
     aArgForParserOSAIS=_getArgs(_args)
@@ -1108,16 +1126,29 @@ def osais_runAI(*args):
     aArgForParserOSAIS=_argsFromFilter(aArgForParserOSAIS, args_ExclusiveOSAIS, True)
     osais_initParser(aArgForParserOSAIS)
 
+    ## now that we have processed args, we keep them locally (avoid globals messup)
+    _localOrig=gArgsOSAIS.OSAIS_origin
+    _localT=gArgsOSAIS.tokenAI
+    _localU=gArgsOSAIS.username
+    _localUID=gArgsOSAIS.uid
+    _localODir=gArgsOSAIS.outdir
+    _localIDir=gArgsOSAIS.indir
+    _localCycle=gArgsOSAIS.cycle
+    _localFilename=gArgsOSAIS.filename
+
+    _isGateway=None
     if gIsWarmup:
         print("=> Warming up...")
     else:
+        ## req received from a gateway ot OSAIS?
+        _isGateway = not (_localOrig == "https://opensourceais.com/" or _localOrig == "https://opensourceais.com" or _localOrig[:5]== "http:")
         print("=> before run: processed args from url: "+str(aArgForparserAI)+"\r\n")
 
     ## notify OSAIS (Req received)
-    CredsParam=getCredsParams()
-    MorphingParam=getMorphingParams()
+    CredsParam=getCredsParams(_localT, _localU, _isGateway)
+    MorphingParam=getMorphingParams(_localUID, _localCycle, _localFilename)
     StageParam=getStageParams(AI_PROGRESS_REQRECEIVED, 0)
-    osais_notify(_orig, CredsParam, MorphingParam , StageParam)
+    osais_notify(_localOrig, CredsParam, MorphingParam , StageParam)
 
     ## processing accepted
     gLastProcessStart_at=datetime.utcnow()
@@ -1125,7 +1156,7 @@ def osais_runAI(*args):
 
     ## notify OSAIS (start)
     StageParam=getStageParams(AI_PROGRESS_AI_STARTED, 0)
-    osais_notify(_orig, CredsParam, MorphingParam , StageParam)
+    osais_notify(_localOrig, CredsParam, MorphingParam , StageParam)
 
     ## start watch file creation
     _output=_getOutputDir()
@@ -1133,7 +1164,7 @@ def osais_runAI(*args):
     
     ## Notif OSAIS
     StageParam=getStageParams(AI_PROGRESS_INIT_IMAGE, 0)
-    osais_notify(_orig, CredsParam, MorphingParam , StageParam)
+    osais_notify(_localOrig, CredsParam, MorphingParam , StageParam)
 
     ## run AI
     response=None
@@ -1159,7 +1190,7 @@ def osais_runAI(*args):
 
     ## notify end
     StageParam=getStageParams(AI_PROGRESS_AI_STOPPED, cost)
-    osais_notify(_orig, CredsParam, MorphingParam , StageParam)
+    osais_notify(_localOrig, CredsParam, MorphingParam , StageParam)
 
     if gIsWarmup:
         _strDelta=str(delta)
@@ -1175,24 +1206,23 @@ def osais_runAI(*args):
 #       get formatted params from AI current state
 ## ------------------------------------------------------------------------
 
-def getCredsParams() :
+def getCredsParams(_token, _username, _isGateway) :
     global gName
     global gArgsOSAIS
     return {
         "engine": gName, 
         "version": gVersion, 
-        "tokenAI": gArgsOSAIS.tokenAI,
-        "username": gArgsOSAIS.username,
-        "isLocal": gArgsOSAIS.isLocal
+        "tokenAI": _token,
+        "username": _username,
+        "isGateway": _isGateway
     } 
 
-def getMorphingParams() :
+def getMorphingParams(_localUID, _localCycle, _localFilename) :
     global gArgsOSAIS
     return {
-        "uid": gArgsOSAIS.uid,
-        "cycle": gArgsOSAIS.cycle,
-        "filename": gArgsOSAIS.filename, 
-        "odir": _getOutputDir()
+        "uid": _localUID,
+        "cycle": _localCycle,
+        "filename": _localFilename
     }
 
 def getStageParams(_stage, _cost) :
@@ -1246,7 +1276,6 @@ def _uploadImageToGateway(_origin, objParam):
     headers = {
         "Content-Type": 'application/json', 
         'Accept': 'text/plain',
-        "Authorization": f"Bearer {gVAIAuthToken}"
     }
 
     api_url=f"{_origin}api/v1/public/upload"        
@@ -1255,21 +1284,29 @@ def _uploadImageToGateway(_origin, objParam):
     objRes=response.json()
     return objRes    
 
+## got notified of file creation (by watch)
 def osais_onNotifyFileCreated(_dir, _filename, _args):
     ## where is the caller?
-    _orig=None
-    try: 
-        if _args["-orig"]:
-            _orig=_args["-orig"]
-    except:
-        _orig=None
+    _isGateway=None
+    _origin=_args.get('-orig')
+    if _origin!=None:
+        _isGateway = not (_origin == "https://opensourceais.com/" or _origin == "https://opensourceais.com" or _origin[:5]== "http:")
+
+    ## also send to S3
+    _fileS3=osais_uploadFileToS3(_dir+_filename, getS3BucketOutputDir())
 
     # notify
-    gArgsOSAIS.filename=_filename
+    _cycle=0
+    try: 
+        if _args["-cycle"]:
+            _cycle=_args["-cycle"]
+    except:
+        _cycle=0
+
     _stageParam=getStageParams(AI_PROGRESS_DONE_IMAGE, 0)
-    _morphingParam=getMorphingParams()
-    _credsParam=getCredsParams()
-    osais_notify(_orig, _credsParam, _morphingParam, _stageParam)            # OSAIS Notification
+    _morphingParam=getMorphingParams(_args["-uid"], _cycle, _fileS3)
+    _credsParam=getCredsParams(_args["-t"], _args["-u"], _isGateway)
+    osais_notify(_origin, _credsParam, _morphingParam, _stageParam)            # OSAIS Notification
     return True
 
 def _notifyGateway(_origin, objParam):
@@ -1340,44 +1377,48 @@ def osais_notify(_origin, CredParam, MorphingParam, StageParam):
         objParam["response"]["cost"]= str(StageParam["cost"])
 
     ## Notify OSAIS (as Virtual AI)
-    if gIsVirtualAI:
+    if gIsVirtualAI and CredParam["isGateway"]==False:
         try: 
             objRes=_notifyOSAIS(objParam)
             _at=objRes["data"]["notified_at"]
-            print("\r\n ["+_at+"] => Notified OSAIS ("+str(StageParam["stage"])+"/ "+StageParam["descr"]+"): "+str(merged)+ " on: "+api_url)
+            print("\r\n ["+_at+"] => Notified OSAIS ("+str(StageParam["stage"])+"/ "+StageParam["descr"]+"): "+str(merged))
         except:
-            consoleLog({"msg": "Failed to notify stage ("+str(StageParam["stage"])+ " to OSAIS"})
+            consoleLog({"msg": "VAI Failed to notify stage ("+str(StageParam["stage"])+ ") to OSAIS"})
 
     ## Notify Gateway (as Local AI)
-    if gIsLocal:
+    if gIsLocal and CredParam["isGateway"]==True :
         try: 
             objRes=_notifyGateway(_origin, objParam)
             _at=objRes["data"]["notified_at"]
-            print("\r\n ["+_at+"] => Notified Gateway ("+str(StageParam["stage"])+"/ "+StageParam["descr"]+"): "+str(merged)+ " on: "+api_url)
+            print("\r\n ["+_at+"] => Notified Gateway ("+str(StageParam["stage"])+"/ "+StageParam["descr"]+"): "+str(merged)+ " on: "+_origin+"\r\n")
         except:
-            consoleLog({"msg": "Failed to notify stage ("+str(StageParam["stage"])+ " to local Gateway "+_origin})
+            consoleLog({"msg": "Local AI Failed to notify stage ("+str(StageParam["stage"])+ ") to local Gateway "+_origin})
 
     if StageParam["stage"]==AI_PROGRESS_DONE_IMAGE:
-        if gIsVirtualAI==True:
-            _dir=MorphingParam["odir"]
-            if _dir==None:
-                _dir=gOutputDir
-            _dirImage=_dir+_filename
+        # we do not need to upload if already in s3
+        if not getS3BucketRoot() in _filename:
+            if gIsVirtualAI==True:
+                _dir=MorphingParam["odir"]
+                if _dir==None:
+                    _dir=gOutputDir
+                _dirImage=_dir+_filename
 
-            with open(_dirImage, "rb") as image_file:
-                image_data = image_file.read()
+                with open(_dirImage, "rb") as image_file:
+                    image_data = image_file.read()
 
-            im_b64 = base64.b64encode(image_data).decode("utf8")
-            param={
-                "image": im_b64,
-                "uid": str(MorphingParam["uid"]),
-                "cycle": str(MorphingParam["cycle"]),
-                "engine": CredParam["engine"],
-            }            
-            if CredParam["isLocal"]:
-                _uploadImageToGateway(_origin, param)
-            else:
-                _uploadImageToOSAIS(_origin, param)
+                im_b64 = base64.b64encode(image_data).decode("utf8")
+                param={
+                    "image": im_b64,
+                    "uid": str(MorphingParam["uid"]),
+                    "cycle": str(MorphingParam["cycle"]),
+                    "engine": CredParam["engine"],
+                }   
+
+    #            if CredParam["isGateway"]==True:
+    #                _uploadImageToGateway(_origin, param)
+
+                if CredParam["isGateway"]==False:
+                    _uploadImageToOSAIS(_origin, param)
     return objRes
 
 ## ------------------------------------------------------------------------
@@ -1433,6 +1474,7 @@ def osais_initializeAI(_envFile):
         osais_resetOSAIS(f"http://{gIPLocal}:{gPortLocalOSAIS}/")
     else:
         osais_resetOSAIS("https://opensourceais.com/")
+    
     if gIsVirtualAI:
         try:
             osais_authenticateAI()
