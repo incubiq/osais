@@ -1,5 +1,5 @@
 
-__version__="1.0.44"
+__version__="1.0.45"
 
 ## ========================================================================
 ## 
@@ -366,6 +366,7 @@ def osais_uploadFileToS3(_filename, _dirS3):
             # Key - S3 object name (can contain subdirectories). If not specified then file_name is used
             _baseName=os.path.basename(_filename)
             gS3.meta.client.upload_file(Filename=_filename, Bucket=gS3Bucket, Key=_dirS3+_baseName)
+            print("=> Uploaded "+_filename+" to S3")
             return root+_dirS3+_baseName
             
         except Exception as err:
@@ -387,9 +388,10 @@ def osais_downloadFileFromS3(_filePath, _dir):
             local_file_path = _dir+_baseName
 
             gS3.Bucket(gS3Bucket).download_file(_filePath, local_file_path)
+            print("=> Downloaded "+_filePath+" from S3")
             return local_file_path
         except Exception as err:
-            consoleLog({"msg":"Could not download file from S3"})
+            consoleLog({"msg":"Could not download file "+_filePath+" from S3"})
             raise err
         
     return False
@@ -511,12 +513,14 @@ def _loadConfig(_name):
         print(f'CRITICAL: No config file {_dirFile}')
         sys.exit()
 
-    gVersion=_json["version"]
-    gDescription=_json["description"]
-    gOrigin=_json["origin"]
-    _cost=_json["default_cost"]
-    if _cost!=None:
-        gDefaultCost=_cost
+    # do not set global vars for osais config
+    if _name!= "osais":
+        gVersion=_json["version"]
+        gDescription=_json["description"]
+        gOrigin=_json["origin"]
+        _cost=_json["default_cost"]
+        if _cost!=None:
+            gDefaultCost=_cost
 
     return _json
 
@@ -537,8 +541,8 @@ def _getFullConfig(_name) :
     if gIsDebug:
         _ip=gIPLocal                ## we register with local ip if we are in local gateway mode
 
-    _jsonAI=_loadConfig(_name)
     _jsonBase=_loadConfig("osais")
+    _jsonAI=_loadConfig(_name)
 
     objCudaInfo=getCudaInfo()
     gpuName="no GPU"
@@ -667,6 +671,7 @@ def osais_getEnv(_filename):
 
     if AWSID!=None and AWSSecret!=None:
         gAWSSession = boto3.Session(
+            region_name="eu-west-2",            ## todo : externalise this
             aws_access_key_id=AWSID,
             aws_secret_access_key=AWSSecret
         )
@@ -1081,8 +1086,9 @@ def osais_runAI(*args):
     _uid=_args.get('-uid')
     if _uid in gAProcessed:
         consoleLog({"msg": "Not processing "+str(_uid)+", already tried!"})
-        return  None
-    
+        return  None    
+    print ("\r\n=> Processing request with UID "+str(_uid))
+
     ## process the filename and download it locally
     try:
         ## the filename of the locally downloaded "url_upload" url (or the S3 url)
@@ -1100,14 +1106,13 @@ def osais_runAI(*args):
                 _args["-odir"]=gOutputDir
 
             except Exception as err:
-                consoleLog({"msg":"Could not download image from S3"})
                 raise err
         else:
             if not _args["-warmup"]:
                 raise ValueError("CRITICAL: require a upload url in S3 ")
                 
     except Exception as err:
-        consoleLog({"msg":"did not get an upload url"})
+        consoleLog({"msg":"did not get a -filename or could not process"})
         raise err
 
     ## start time
