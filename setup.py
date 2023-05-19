@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='osais',
-    version='1.0.45',
+    version='1.0.46',
     author='incubiq',
     author_email='eric@incubiq.com',
     description='The osais Python lib for connecting AIs to OSAIS cloud',
@@ -13,6 +13,7 @@ setup(
     packages=["osais"],
     package_data={'src': ['osais.json']},
     install_requires=[
+        'asyncio ==3.4.3',
         'requests >=2.25.1',
         "schedule ==1.1.0",
         "watchdog ==2.1.9",

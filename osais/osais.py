@@ -1,5 +1,5 @@
 
-__version__="1.0.45"
+__version__="1.0.46"
 
 ## ========================================================================
 ## 
@@ -19,6 +19,7 @@ import platform
 import ctypes
 import threading
 import boto3
+import asyncio
 
 cuda=0                          ## from cuda import cuda, nvrtc
 gObserver=None
@@ -69,6 +70,9 @@ def start_notification_thread(fnOnNotify):
     thread = threading.Thread(target=_run, args=(fnOnNotify))
     thread.start()
     return _run
+
+async def wait_250ms():
+  await asyncio.sleep(0.250)
 
 ## ------------------------------------------------------------------------
 #       Directory utils
@@ -355,17 +359,22 @@ def osais_downloadImage(url) :
 
     return f"{local_filename}{file_extension}"
 
-def osais_uploadFileToS3(_filename, _dirS3): 
+## upload image to S3 and tag it
+def osais_uploadFileToS3(_filename, _dirS3, objTag): 
     global gS3
     global gS3Bucket
     root=getS3BucketRoot()
     if gS3!=None:
         try:
+            from urllib import parse    
             # Filename - File to upload
             # Bucket - Bucket to upload to (the top level directory under AWS S3)
             # Key - S3 object name (can contain subdirectories). If not specified then file_name is used
             _baseName=os.path.basename(_filename)
-            gS3.meta.client.upload_file(Filename=_filename, Bucket=gS3Bucket, Key=_dirS3+_baseName)
+            gS3.meta.client.upload_file(Filename=_filename, Bucket=gS3Bucket, Key=_dirS3+_baseName, ExtraArgs={
+                'ACL':'public-read', 
+                "Tagging": parse.urlencode(objTag)
+            })
             print("=> Uploaded "+_filename+" to S3")
             return root+_dirS3+_baseName
             
@@ -470,7 +479,6 @@ gAProcessed=[]                  ## all token being sent to processing (never cal
 gIsScheduled=False              ## do we have a scheduled event running?
 
 ## run times
-gIsWarmup=False                 ## True if the request was a warmup one (not a true one from client)
 gIsBusy=False                   ## True if AI busy processing
 gDefaultCost=1000               ## default cost value in ms (will get overriden fast, this value is no big deal)
 gaProcessTime=[]                ## Array of last x (10/20?) time spent for processed requests 
@@ -705,11 +713,9 @@ def _initializeCost() :
 
 # init the dafault cost array
 def _addCost(_cost) :
-    global gIsWarmup
     global gaProcessTime
-    if gIsWarmup==False:
-        gaProcessTime.insert(0, _cost)
-        gaProcessTime.pop()
+    gaProcessTime.insert(0, _cost)
+    gaProcessTime.pop()
 
 # init the dafault cost array
 def _getAverageCost() :
@@ -1045,7 +1051,6 @@ def osais_initParser(aArg):
     global gArgsOSAIS
     global gInputDir
     global gOutputDir
-    global gIsWarmup
 
     # Create the parser
     vq_parser = argparse.ArgumentParser(description='Arg parser init by OSAIS')
@@ -1059,18 +1064,16 @@ def osais_initParser(aArg):
     vq_parser.add_argument("-idir", "--indir", type=str, help="input directory", default=gInputDir, dest='indir')
     vq_parser.add_argument("-cycle", "--cycle", type=int, help="cycle", default=0, dest='cycle')
     vq_parser.add_argument("-filename", "--filename", type=str, help="filename", default="default", dest='filename')
-    vq_parser.add_argument("-warmup", "--warmup", type=bool, help="warmup", default=False, dest='warmup')
 
     gArgsOSAIS = vq_parser.parse_args(aArg)
-    gIsWarmup=(gArgsOSAIS.warmup==True or gArgsOSAIS.warmup=="True")
     if gArgsOSAIS.OSAIS_origin!=None:
         print("=> origin set to "+gArgsOSAIS.OSAIS_origin)
     else:
         print("=> origin set to None")
     return True
-
-## PUBLIC - run the AI (at least try)
-def osais_runAI(*args):
+    
+## run the AI (at least try)
+def _runAI(isWarmup, *args, ):
     global gIsBusy
     global gAProcessed
     global gName 
@@ -1112,8 +1115,13 @@ def osais_runAI(*args):
                 raise ValueError("CRITICAL: require a upload url in S3 ")
                 
     except Exception as err:
-        consoleLog({"msg":"did not get a -filename or could not process"})
-        raise err
+        print("=> did not get a -filename, we continue")
+        _args["-idir"]=gInputDir
+        _args["-odir"]=gOutputDir
+
+    if isWarmup:
+        _args["-idir"]="./static/"
+        print("=> Warming up...")
 
     ## start time
     gIsBusy=True
@@ -1140,11 +1148,11 @@ def osais_runAI(*args):
     _localIDir=gArgsOSAIS.indir
     _localCycle=gArgsOSAIS.cycle
     _localFilename=gArgsOSAIS.filename
-
     _isGateway=None
-    if gIsWarmup:
-        print("=> Warming up...")
-    else:
+
+    if isWarmup:
+        _localOrig=None
+    else :
         ## req received from a gateway ot OSAIS?
         _isGateway = not (_localOrig == "https://opensourceais.com/" or _localOrig == "https://opensourceais.com" or _localOrig[:5]== "http:")
         print("=> before run: processed args from url: "+str(aArgForparserAI)+"\r\n")
@@ -1191,21 +1199,30 @@ def osais_runAI(*args):
     end_date = datetime.utcnow()
     delta=end_date - beg_date
     cost = int(delta.total_seconds()* 1000 + delta.microseconds / 1000)
-    _addCost(cost)
+
+    if isWarmup:
+        _strDelta=str(delta)
+        print("\r\n=> AI ready!")
+        print("=> Able to process requests in "+_strDelta+" secs\r\n")
+    else:
+        _addCost(cost)
 
     ## notify end
     StageParam=getStageParams(AI_PROGRESS_AI_STOPPED, cost)
     osais_notify(_localOrig, CredsParam, MorphingParam , StageParam)
 
-    if gIsWarmup:
-        _strDelta=str(delta)
-        print("\r\n=> AI ready!")
-        print("=> Able to process requests in "+_strDelta+" secs\r\n")
-
     ## default OK response if the AI does not send any
     if response==None:
         response=True
     return response
+
+### PUBLIC - warmup the AI (at least try)
+def osais_warmupAI(*args):
+    return _runAI(True, *args)
+
+## PUBLIC - run the AI (at least try)
+def osais_runAI(*args):
+    return _runAI(False, *args)
 
 ## ------------------------------------------------------------------------
 #       get formatted params from AI current state
@@ -1289,16 +1306,21 @@ def _uploadImageToGateway(_origin, objParam):
     objRes=response.json()
     return objRes    
 
-## got notified of file creation (by watch)
-def osais_onNotifyFileCreated(_dir, _filename, _args):
-    ## where is the caller?
+async def _delayed_onNotifyFileCreated(_dir, _filename, _args):
+    ## a small wait
+    await wait_250ms()
+
     _isGateway=None
     _origin=_args.get('-orig')
     if _origin!=None:
         _isGateway = not (_origin == "https://opensourceais.com/" or _origin == "https://opensourceais.com" or _origin[:5]== "http:")
 
-    ## also send to S3
-    _fileS3=osais_uploadFileToS3(_dir+_filename, getS3BucketOutputDir())
+    ## upload image to S3
+    objTag={
+        "uid": _args["-uid"],
+        "username": _args["-u"]
+    }
+    _fileS3=osais_uploadFileToS3(_dir+_filename, getS3BucketOutputDir(), objTag)
 
     # notify
     _cycle=0
@@ -1313,6 +1335,10 @@ def osais_onNotifyFileCreated(_dir, _filename, _args):
     _credsParam=getCredsParams(_args["-t"], _args["-u"], _isGateway)
     osais_notify(_origin, _credsParam, _morphingParam, _stageParam)            # OSAIS Notification
     return True
+
+## got notified of file creation (by watch)
+def osais_onNotifyFileCreated(_dir, _filename, _args):
+    asyncio.run(_delayed_onNotifyFileCreated(_dir, _filename, _args))
 
 def _notifyGateway(_origin, objParam):
     headers = {
@@ -1348,10 +1374,9 @@ def osais_notify(_origin, CredParam, MorphingParam, StageParam):
     global gIsLocal
     global gVAIAuthToken
     global gLastChecked_at
-    global gIsWarmup
 
     ## no notification of warmup or unknown caller
-    if gIsWarmup or _origin==None:
+    if _origin==None:
         return None
     
     gLastChecked_at = datetime.utcnow()
