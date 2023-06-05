@@ -1,5 +1,5 @@
 
-__version__="1.0.46"
+__version__="1.0.47"
 
 ## ========================================================================
 ## 
@@ -460,7 +460,8 @@ gClientID=None                  ## ID of authenticated client into OSAIS
 gClientAuthToken=None           ## the resulting Auth token as Client, after login
 
 ## Gateway
-gOriginGateway=None             ## location of the local gateway for this (local) AI
+gOriginGateway=None             ## location of the local gateway for this (local) AI, as http://{ip}:{port}
+gGatewayTunnel=None             ## tunnel for the gateway (to be used when inside a docker)
 
 ## AWS related
 gS3=None
@@ -482,6 +483,7 @@ gIsScheduled=False              ## do we have a scheduled event running?
 gIsBusy=False                   ## True if AI busy processing
 gDefaultCost=1000               ## default cost value in ms (will get overriden fast, this value is no big deal)
 gaProcessTime=[]                ## Array of last x (10/20?) time spent for processed requests 
+gAverageCostInUSD=0             ## average cost value in USD
 
 ## processing specifics
 gArgsOSAIS=None                 ## the args passed to the AI which are specific to OSAIS for sending notifications
@@ -602,6 +604,7 @@ def osais_getEnv(_filename):
     global gS3
     global gS3Bucket
     global gOriginOSAIS
+    global gGatewayTunnel
 
     AWSID=None
     AWSSecret=None
@@ -636,6 +639,8 @@ def osais_getEnv(_filename):
                         AWSID = value
                     elif key == "AWS_ACCESS_KEY_SECRET":
                         AWSSecret = value
+                    elif key == "TUNNEL_GATEWAY":
+                        gGatewayTunnel = value
         except Exception as err: 
             consoleLog({"msg": f'No env file {_filename}'})
 
@@ -691,6 +696,9 @@ def osais_getEnv(_filename):
     else:
         gOriginOSAIS="https://opensourceais.com/"
 
+    if os.environ.get('TUNNEL_GATEWAY') and gGatewayTunnel==None:
+        gGatewayTunnel=os.environ.get('TUNNEL_GATEWAY')
+
     return {
         "name": gName,
         "osais": gOriginOSAIS,
@@ -718,7 +726,7 @@ def _addCost(_cost) :
     gaProcessTime.pop()
 
 # init the dafault cost array
-def _getAverageCost() :
+def _getAverageCostInMs() :
     global gaProcessTime
     average = sum(gaProcessTime) / len(gaProcessTime)
     return average
@@ -794,6 +802,7 @@ def osais_getInfo() :
     global gIsBusy
     global gLastProcessStart_at
     global gLastChecked_at
+    global gAverageCostInUSD
 
     objConf=_getFullConfig(gName)
 
@@ -810,7 +819,8 @@ def osais_getInfo() :
         "machine": gMachineName,
         "owner": gUsername, 
         "isAvailable": (gIsBusy==False),
-        "averageResponseTime": _getAverageCost(), 
+        "averageResponseTime": _getAverageCostInMs(), 
+        "averageCost": gAverageCostInUSD,           ## todo
         "config_ai": objConf["config_ai"],
         "config_base": objConf["config_base"]
     }
@@ -838,7 +848,7 @@ def _connectWithGateway() :
             raise ValueError("CRITICAL: could not notify Gateway")
 
     except Exception as err:
-        consoleLog({"msg":"CRITICAL: could not notify Gateway"})
+        consoleLog({"msg":"could not notify Gateway"})
         raise err
     return True
 
@@ -1462,7 +1472,7 @@ def osais_resetOSAIS(_location):
     return True
 
 ## PUBLIC - Init the Virtual AI
-def osais_initializeAI(_envFile):
+def osais_initializeAI(_envFile, _envSecret):
     global gIsDocker
     global gIsDebug
     global gIsLocal
@@ -1479,9 +1489,11 @@ def osais_initializeAI(_envFile):
     global gVAIAuthToken
     global gOriginOSAIS
     global gClientAuthToken
+    global gGatewayTunnel
 
     ## load env 
     obj=osais_getEnv(_envFile)
+    obj2=osais_getEnv(_envSecret)
     gIsLocal=obj["isLocal"]
     gIsVirtualAI=obj["isVirtualAI"]
     gUsername=obj["username"]
@@ -1496,9 +1508,13 @@ def osais_initializeAI(_envFile):
     ## make sure we have a config file
     _loadConfig(gName)
 
-    ## where is OSAIS for us then?
+    ## where is the Gateway for us? if in Docker, we can only call the gateway on its tunnel
     gOriginGateway=f"http://{gIPLocal}:{gPortGateway}/"         ## config for local gateway (local and not virtual)
+    if gIsDocker:
+        gOriginGateway=gGatewayTunnel
 
+
+    ## where is OSAIS for us?
     ## we set OSAIS location in all cases (even if in gateway) because this AI can generate it s own page for sending reqs (needs a client logged into OSAIS)
     if gIsDebug:
         osais_resetOSAIS(f"http://{gIPLocal}:{gPortLocalOSAIS}/")
