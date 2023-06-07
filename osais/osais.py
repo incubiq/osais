@@ -1,5 +1,5 @@
 
-__version__="1.0.47"
+__version__="1.0.48"
 
 ## ========================================================================
 ## 
@@ -161,8 +161,12 @@ def get_container_ip():
 def get_external_ip():
     import requests
     url = "https://api.ipify.org"
-    response = requests.get(url)
-    return response.text.strip()
+    try: 
+        ## do not fail whole lib for this
+        response = requests.get(url)
+        return response.text.strip()
+    except: 
+        return "0.0.0.0"
 
 ## get our external port
 def get_port(): 
@@ -180,6 +184,27 @@ def get_list_of_modules():
         installed_packages_list.append({i.key: i.version})
     return installed_packages_list
 
+## create a tunnel via cloudflare
+def create_tunnel(port):
+    import subprocess
+    import re
+    try:
+        command = ['cloudflared', 'tunnel', '--url', f'http://localhost:{port}']
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        for line in process.stderr:
+            data = line.decode('utf-8')
+            output = re.search(r'https:\/\/.*\.trycloudflare\.com', data)
+            if output and output.group(0):
+                return f'{output.group(0)}/'
+
+        print('Could not create a Tunnel')
+        return None
+    
+    except Exception as err:
+        print('Could not create a Tunnel')
+        return None
+    
 ## ------------------------------------------------------------------------
 #       GPU utils
 ## ------------------------------------------------------------------------
@@ -436,7 +461,7 @@ gUsername=None                  ## user owning this AI (necessary to claim VirtA
 gName=None                      ## name of this AI (name of engine)
 gVersion="0.0.0"                ## name of this AI's version (version of engine)
 gDescription=None               ## AI's quick description
-gOrigin=None                    ## where this AI came from (on internet)
+gGithub=None                    ## where this AI came from (on internet)
 gMachineName=get_machine_name() ## the name of the machine (will change all the time if inside docker, ot keep same if running on local server)
 gLastChecked_at=datetime.utcnow()  ## when was this AI last used for processing anything
 gLastProcessStart_at=None       ## when was this AI last start event for processing anything
@@ -446,6 +471,7 @@ gIsDocker=is_running_in_docker()   ## are we running in a Docker?
 gIsVirtualAI=False              ## are we working as a Virtual AI config?
 gIsLocal=False                  ## are we working locally (with a gateway)?
 gIsDebug=False                  ## are we working in debug (localhost server)? note: we cannot be PROD and DEBUG at the same time
+gAITunel=None                   ## tunnel for where to call this AI (caller in a docker cannot call localhost:port)
 
 ## OSAIS location
 gOriginOSAIS=None               ## location of OSAIS (Prod or debug)
@@ -460,12 +486,13 @@ gClientID=None                  ## ID of authenticated client into OSAIS
 gClientAuthToken=None           ## the resulting Auth token as Client, after login
 
 ## Gateway
-gOriginGateway=None             ## location of the local gateway for this (local) AI, as http://{ip}:{port}
-gGatewayTunnel=None             ## tunnel for the gateway (to be used when inside a docker)
+gOriginGateway=None             ## location of the local gateway for this (local) AI, as http://{ip}:{port} or preferrably <tunnel>
 
 ## AWS related
 gS3=None
 gS3Bucket=None
+gAWSID=None
+gAWSSecret=None
 gAWSSession=None
 
 ## IP and Ports
@@ -508,7 +535,7 @@ AI_PROGRESS_AI_STOPPED=5
 def _loadConfig(_name): 
     global gVersion
     global gDescription
-    global gOrigin
+    global gGithub
     global gDefaultCost
 
     _json = None
@@ -527,7 +554,7 @@ def _loadConfig(_name):
     if _name!= "osais":
         gVersion=_json["version"]
         gDescription=_json["description"]
-        gOrigin=_json["origin"]
+        gGithub=_json["github"]
         _cost=_json["default_cost"]
         if _cost!=None:
             gDefaultCost=_cost
@@ -546,10 +573,15 @@ def _getFullConfig(_name) :
     global gIPLocal
     global gExtIP
     global gIsLocal
- 
+    global gAITunel
+
     _ip=gExtIP
     if gIsDebug:
         _ip=gIPLocal                ## we register with local ip if we are in local gateway mode
+
+    _location=gAITunel
+    if _location==None:
+        _location=f'http://{_ip}:{gPortAI}/'
 
     _jsonBase=_loadConfig("osais")
     _jsonAI=_loadConfig(_name)
@@ -559,11 +591,15 @@ def _getFullConfig(_name) :
     if objCudaInfo != 0 and "name" in objCudaInfo and objCudaInfo["name"]:
         gpuName=objCudaInfo["name"]
 
+    _jsonAI["ip"]=_ip
+    _jsonAI["port"]=gPortAI
+    _jsonAI["location"]=_location
     return {
         "username": gUsername,
         "os": get_os_name(),
         "gpu": gpuName,
         "machine": get_machine_name(),
+        "location": _location,
         "ip": _ip,
         "port": gPortAI,
         "osais": gOriginOSAIS,
@@ -591,6 +627,77 @@ def osais_isVirtualAI():
 def osais_loadConfig(_name): 
     return _loadConfig(_name)
 
+def _setPropVal(key, val):
+    global gUsername
+    global gIsVirtualAI
+    global gIsDebug
+    global gIsLocal
+    global gName
+    global gVAIToken
+    global gVAISecret
+    global gAWSSession
+    global gS3
+    global gS3Bucket
+    global gOriginOSAIS
+
+    global gAWSID
+    global gAWSSecret
+
+    if key=='TUNNEL_OSAIS' and val!=None and gOriginOSAIS==None:
+        if gOriginOSAIS==None:
+            if gIsDebug: 
+                if val:
+                    gOriginOSAIS=val     # we prefer to get the tunnel location of osais
+                else:
+                    gOriginOSAIS="http://"+gIPLocal+":3022/"
+            else:
+                gOriginOSAIS="https://opensourceais.com/"
+
+    if key == "USERNAME" and val!=None and gUsername==None:
+        gUsername = val
+
+    if key == "IS_DEBUG" and val!=None:
+        _isDebug= (val=="True")
+        if _isDebug!=gIsDebug:
+            print(f'=> is DEBUG updated to {_isDebug}')
+            gIsDebug=_isDebug
+
+    if key == "IS_LOCAL" and val!=None:
+        _isLocal = (val=="True")
+        if _isLocal!=gIsLocal:
+            print(f'=> is Local updated to {_isLocal}')
+            gIsLocal=_isLocal
+                
+    if key == "IS_VIRTUALAI" and val!=None:
+        _isVirtualAI = (val=="True")
+        if _isVirtualAI!=gIsVirtualAI:
+            print(f'=> is Virtual updated to {_isVirtualAI}')
+            gIsVirtualAI=_isVirtualAI
+
+    if key == "ENGINE" and val!=None:
+        _name = val
+        if _name!=gName:
+            print(f"=> Engine name updated to '{_name}'")
+            gName=_name
+    
+    if key == "S3_BUCKET" and val!=None:
+        _s3 = val
+        if _s3!=gS3Bucket:
+            print(f"=> Set S3 bucket to '{_s3}'")
+            gS3Bucket=_s3
+                
+    if key == "VAI_ID" and val!=None and gVAIToken==None:
+        gVAIToken = val
+    
+    if key == "VAI_SECRET" and val!=None and gVAISecret==None:
+        gVAISecret = val
+    
+    if key == "AWS_ACCESS_KEY_ID" and val!=None and gAWSID==None:
+        gAWSID = val
+    
+    if key=='AWS_ACCESS_KEY_SECRET' and val!=None and gAWSSecret==None:
+        gAWSSecret=val
+
 ## PUBLIC - Get env from file (local or docker)
 def osais_getEnv(_filename):
     global gUsername
@@ -604,10 +711,8 @@ def osais_getEnv(_filename):
     global gS3
     global gS3Bucket
     global gOriginOSAIS
-    global gGatewayTunnel
-
-    AWSID=None
-    AWSSecret=None
+    global gAWSID
+    global gAWSSecret
 
     ## read env from config file
     if _filename!=None:
@@ -619,86 +724,35 @@ def osais_getEnv(_filename):
             for var in variables:
                 if var!="":
                     key, value = var.split("=")
-                    if key == "USERNAME":
-                        gUsername = value
-                    elif key == "IS_DEBUG":
-                        gIsDebug = (value=="True")
-                    elif key == "IS_LOCAL":
-                        gIsLocal = (value=="True")
-                    elif key == "IS_VIRTUALAI":
-                        gIsVirtualAI = (value=="True")
-                    elif key == "ENGINE":
-                        gName = value
-                    elif key == "S3_BUCKET":
-                        gS3Bucket = value
-                    elif key == "VAI_ID":
-                        gVAIToken = value
-                    elif key == "VAI_SECRET":
-                        gVAISecret = value
-                    elif key == "AWS_ACCESS_KEY_ID":
-                        AWSID = value
-                    elif key == "AWS_ACCESS_KEY_SECRET":
-                        AWSSecret = value
-                    elif key == "TUNNEL_GATEWAY":
-                        gGatewayTunnel = value
+                    _setPropVal(key, value)
+
         except Exception as err: 
             consoleLog({"msg": f'No env file {_filename}'})
 
     # overload with env settings if any
-    print(f'=> Setting env vars from ENV...')
-    if os.environ.get('IS_DEBUG'):
-        _isDebug=(os.environ.get('IS_DEBUG')=="True")
-        if _isDebug!=gIsDebug:
-            print(f'=> is DEBUG updated to {_isDebug} from ENV var')
-            gIsDebug=_isDebug
-    if os.environ.get('IS_LOCAL'):
-        _isLocal=(os.environ.get('IS_LOCAL')=="True")
-        if _isLocal!=gIsLocal:
-            print(f'=> is Local updated to {_isLocal} from ENV var')
-            gIsLocal=_isLocal
-    if os.environ.get('IS_VIRTUALAI'):
-        _isVirtualAI=(os.environ.get('IS_VIRTUALAI')=="True")
-        if _isVirtualAI!=gIsVirtualAI:
-            print(f'=> is Virtual updated to {_isVirtualAI} from ENV var')
-            gIsVirtualAI=_isVirtualAI
-    if os.environ.get('ENGINE'):
-        _name=os.environ.get('ENGINE')
-        if _name!=gName:
-            print(f"=> Engine name updated to '{_name}' from ENV var")
-            gName=_name
-    if os.environ.get('S3_BUCKET'):
-        _s3=os.environ.get('S3_BUCKET')
-        if _s3!=gS3Bucket:
-            print(f"=> Set S3 bucket to '{_s3}' from ENV var")
-            gS3Bucket=_s3
-    if os.environ.get('USERNAME') and gUsername==None:
-        gUsername=os.environ.get('USERNAME')
-    if os.environ.get('VAI_ID') and gVAIToken==None:
-        gVAIToken=os.environ.get('VAI_ID')
-    if os.environ.get('VAI_SECRET') and gVAISecret==None:
-        gVAISecret=os.environ.get('VAI_SECRET')
-    if os.environ.get('AWS_ACCESS_KEY_ID') and AWSID==None:
-        AWSID=os.environ.get('AWS_ACCESS_KEY_ID')
-    if os.environ.get('AWS_ACCESS_KEY_SECRET') and AWSSecret==None:
-        AWSSecret=os.environ.get('AWS_ACCESS_KEY_SECRET')
+    print(f'=> Setting env vars from ENV...')    
+    _setPropVal("USERNAME", os.environ.get('USERNAME'))
+    _setPropVal("ENGINE", os.environ.get('ENGINE'))
+    _setPropVal("IS_VIRTUALAI", os.environ.get('IS_VIRTUALAI'))
+    _setPropVal("IS_LOCAL", os.environ.get('IS_LOCAL'))
+    _setPropVal("IS_DEBUG", os.environ.get('IS_DEBUG'))
+    _setPropVal("S3_BUCKET", os.environ.get('S3_BUCKET'))
+    _setPropVal("VAI_ID", os.environ.get('VAI_ID'))
+    _setPropVal("VAI_SECRET", os.environ.get('VAI_SECRET'))
+    _setPropVal("AWS_ACCESS_KEY_ID", os.environ.get('AWS_ACCESS_KEY_ID'))
+    _setPropVal("AWS_ACCESS_KEY_SECRET", os.environ.get('AWS_ACCESS_KEY_SECRET'))    
+    _setPropVal("TUNNEL_OSAIS", os.environ.get('TUNNEL_OSAIS'))
 
-    if AWSID!=None and AWSSecret!=None:
+    ## log into S3
+    if gAWSID!=None and gAWSSecret!=None:
         gAWSSession = boto3.Session(
             region_name="eu-west-2",            ## todo : externalise this
-            aws_access_key_id=AWSID,
-            aws_secret_access_key=AWSSecret
+            aws_access_key_id=gAWSID,
+            aws_secret_access_key=gAWSSecret
         )
         gS3 = gAWSSession.resource('s3')
         print(f'=> Logged into AWS S3')
         
-    if gIsDebug: 
-        gOriginOSAIS="http://"+gIPLocal+":3022/"
-    else:
-        gOriginOSAIS="https://opensourceais.com/"
-
-    if os.environ.get('TUNNEL_GATEWAY') and gGatewayTunnel==None:
-        gGatewayTunnel=os.environ.get('TUNNEL_GATEWAY')
-
     return {
         "name": gName,
         "osais": gOriginOSAIS,
@@ -803,13 +857,13 @@ def osais_getInfo() :
     global gLastProcessStart_at
     global gLastChecked_at
     global gAverageCostInUSD
+    global gAITunel
 
     objConf=_getFullConfig(gName)
-
     return {
         "name": gName,
         "version": gVersion,
-        "location": f'http://{objConf["ip"]}:{objConf["port"]}/',
+        "location": objConf["location"],
         "osais": objConf["osais"],
         "gateway": objConf["gateway"],
         "isRunning": True,    
@@ -845,17 +899,39 @@ def _connectWithGateway() :
         response = requests.post(f"{gOriginGateway}api/v1/public/ai/config", headers=headers, data=json.dumps(objParam))
         objRes=response.json()["data"]
         if objRes is None:
-            raise ValueError("CRITICAL: could not notify Gateway")
+            raise ValueError("CRITICAL: could not notify Gateway on "+gOriginGateway)
 
     except Exception as err:
-        consoleLog({"msg":"could not notify Gateway"})
+        consoleLog({"msg":"could not notify Gateway on "+gOriginGateway})
         raise err
     return True
 
 ## PUBLIC - Reset connection to local gateway
-def osais_resetGateway(_localGateway):
+def osais_resetGateway():
     global gOriginGateway
-    gOriginGateway=_localGateway
+    global gOriginOSAIS
+    global gUsername
+
+    ## note: if in Docker, we can only call the gateway on its tunnel
+    ## ask OSAIS the gateways (and tunnel location) for the same owner of this AI
+    try:
+        headers = {
+            "Content-Type": 'application/json', 
+            'Accept': 'text/plain',
+        }
+        response = requests.get(f"{gOriginOSAIS}api/v1/public/user/{gUsername}/gateways", headers=headers)
+        objRes=response.json()["data"]
+        if objRes is None:
+            raise ValueError("could not access OSAIS on "+gOriginOSAIS)
+
+        ## take the first gateway and notify
+        ## todo later ... maybe we update ALL gateways with this AI? (the AI is a slave of all this user's gatyeways?)
+        gOriginGateway=objRes[0]["domain"]
+
+    except Exception as err:
+        consoleLog({"msg":"could not notify OSAIS on "+gOriginOSAIS})
+        raise err
+
     try:
         _connectWithGateway()
     except Exception as err:
@@ -1489,7 +1565,7 @@ def osais_initializeAI(_envFile, _envSecret):
     global gVAIAuthToken
     global gOriginOSAIS
     global gClientAuthToken
-    global gGatewayTunnel
+    global gAITunel
 
     ## load env 
     obj=osais_getEnv(_envFile)
@@ -1504,21 +1580,15 @@ def osais_initializeAI(_envFile, _envSecret):
     gPortAI = gConfig["port"]
     gVersion = gConfig["version"]
 
+    ## try to create a tunnel
+    gAITunel=create_tunnel(gPortAI)
 
     ## make sure we have a config file
     _loadConfig(gName)
 
-    ## where is the Gateway for us? if in Docker, we can only call the gateway on its tunnel
-    gOriginGateway=f"http://{gIPLocal}:{gPortGateway}/"         ## config for local gateway (local and not virtual)
-    if gIsDocker:
-        gOriginGateway=gGatewayTunnel
-
-
     ## where is OSAIS for us?
     ## we set OSAIS location in all cases (even if in gateway) because this AI can generate it s own page for sending reqs (needs a client logged into OSAIS)
-    if gIsDebug:
-        osais_resetOSAIS(f"http://{gIPLocal}:{gPortLocalOSAIS}/")
-    else:
+    if gIsDebug==False:
         osais_resetOSAIS("https://opensourceais.com/")
     
     if gIsVirtualAI:
@@ -1530,7 +1600,8 @@ def osais_initializeAI(_envFile, _envSecret):
     
     if gIsLocal:
         try:
-            osais_resetGateway(gOriginGateway)
+            ## where is the Gateway for us? 
+            osais_resetGateway()
         except Exception as err:
             print("CRITICAL: could not notify Gateway at "+gOriginGateway)
             return None
@@ -1548,10 +1619,13 @@ def osais_initializeAI(_envFile, _envSecret):
     else:
         print("=> in Docker:               False")
     print("=> is Debug:                "+str(gIsDebug))
+    print("=> OSAIS:                   "+str(gOriginOSAIS))
     print("\r\n=> is Local:                "+str(gIsLocal))
     if gIsLocal:
         print(" > gateway:                 "+gOriginGateway)
-        print(" > local AI location:       "+str(gIPLocal)+":"+str(gPortAI))
+        print(" > AI location:             "+str(gIPLocal)+":"+str(gPortAI))
+        if gAITunel!=None:
+            print(" > AI tunnel :              "+gAITunel)
     print("\r\n=> is Virtual:              "+str(gIsVirtualAI))
     if gIsVirtualAI:
         print(" > virtAI location (ext.):  "+str(gExtIP)+":"+str(gPortAI))

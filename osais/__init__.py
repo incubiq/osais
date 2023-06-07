@@ -1,7 +1,7 @@
 """
 A package for OSAIS virtual AI.
 """
-__version__="1.0.47"
+__version__="1.0.48"
 __author__ = "incubiq"
 __email__ = "eric@incubiq.com"
 
