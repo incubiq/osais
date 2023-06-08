@@ -1,5 +1,5 @@
 
-__version__="1.0.48"
+__version__="1.0.49"
 
 ## ========================================================================
 ## 
@@ -923,13 +923,19 @@ def osais_resetGateway():
         objRes=response.json()["data"]
         if objRes is None:
             raise ValueError("could not access OSAIS on "+gOriginOSAIS)
+        
+        if len(objRes)==0:
+            raise ValueError("No Gateway for this AI")
 
         ## take the first gateway and notify
         ## todo later ... maybe we update ALL gateways with this AI? (the AI is a slave of all this user's gatyeways?)
-        gOriginGateway=objRes[0]["domain"]
+        try:
+            gOriginGateway=objRes[0]["location"]
+        except:
+            raise ValueError("Gateway is not started")
 
     except Exception as err:
-        consoleLog({"msg":"could not notify OSAIS on "+gOriginOSAIS})
+        consoleLog({"msg":err.args[0]})
         raise err
 
     try:
